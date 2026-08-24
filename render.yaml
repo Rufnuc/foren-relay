@@ -1,0 +1,26 @@
+# Render Blueprint for the Foren relay. When you connect this repo to Render,
+# it reads this file and preconfigures the service. The one secret
+# (RELAY_SOLANA_SECRET) is NOT in here — you paste it into the dashboard.
+services:
+  - type: web
+    name: foren-relay
+    runtime: node
+    plan: free # free sleeps after ~15 min idle (slow first request); "starter" (~$7/mo) stays awake
+    buildCommand: npm install && npm run build
+    startCommand: node dist/index.js
+    healthCheckPath: /livez
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: SOLANA_CLUSTER
+        value: devnet
+      - key: PINNING_PROVIDER
+        value: noop
+      # The Capacitor mobile app's web origin (Android + iOS). Requests from the
+      # app must be allowed through CORS.
+      - key: CORS_ORIGINS
+        value: https://localhost,capacitor://localhost
+      # The devnet signing key (JSON array from relay/.solana-keypair.json).
+      # sync:false = you set it by hand in the dashboard so it stays a secret.
+      - key: RELAY_SOLANA_SECRET
+        sync: false

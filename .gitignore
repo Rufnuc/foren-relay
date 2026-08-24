@@ -1,0 +1,7 @@
+# Never commit secrets or build output.
+node_modules/
+dist/
+.solana-keypair.json
+.env
+.env.*
+*.log
