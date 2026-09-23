@@ -83,9 +83,13 @@ const Schema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
-  // SQLite database file. On ephemeral hosts (Render free tier) mount a
-  // persistent disk and point this at it, or weekly data resets on redeploy.
+  // Local SQLite database file (used when USAGE_LIBSQL_URL is not set). On
+  // ephemeral hosts (Render free tier) this resets on redeploy — prefer libSQL.
   USAGE_DB_PATH: z.string().default("./data/usage.db"),
+  // Durable backend: a libSQL/Turso database URL (libsql://... or https://...)
+  // + auth token. When set, usage data persists across redeploys on free hosts.
+  USAGE_LIBSQL_URL: z.string().default(""),
+  USAGE_LIBSQL_AUTH_TOKEN: z.string().default(""),
   // How far a submission's issuedAt may be from server time (replay freshness).
   USAGE_MAX_SKEW_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
   // How long replay nonces are retained (>= max skew). Older nonces are pruned.

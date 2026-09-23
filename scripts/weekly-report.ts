@@ -21,13 +21,19 @@ async function main() {
 
   const week = process.argv[2] ?? isoWeek(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const usage = buildUsageService(
-    { dbPath: cfg.USAGE_DB_PATH, maxSkewMs: cfg.USAGE_MAX_SKEW_MS, nonceRetentionMs: cfg.USAGE_NONCE_RETENTION_MS },
+    {
+      dbPath: cfg.USAGE_DB_PATH,
+      maxSkewMs: cfg.USAGE_MAX_SKEW_MS,
+      nonceRetentionMs: cfg.USAGE_NONCE_RETENTION_MS,
+      libsqlUrl: cfg.USAGE_LIBSQL_URL || undefined,
+      libsqlAuthToken: cfg.USAGE_LIBSQL_AUTH_TOKEN || undefined,
+    },
     logger,
   );
 
-  const existing = usage.store.getReport(week);
+  const existing = await usage.store.getReport(week);
   const version = existing ? existing.version + 1 : 1;
-  const built = usage.buildReportForWeek(week, version);
+  const built = await usage.buildReportForWeek(week, version);
 
   logger.info({ week, version, sha256: built.sha256, metrics: built.report.metrics }, "built weekly report");
 
@@ -54,7 +60,7 @@ async function main() {
     logger.error({ err }, "on-chain anchoring failed — storing report WITHOUT commitment (re-run to anchor)");
   }
 
-  usage.store.putReport({
+  await usage.store.putReport({
     week,
     version,
     json: built.json,
@@ -93,7 +99,7 @@ async function main() {
     ].join("\n"),
   );
 
-  usage.close();
+  await usage.close();
 }
 
 main().catch((err) => {

@@ -7,8 +7,12 @@ import { buildApp } from "../src/server";
 import { loadConfig } from "../src/config";
 import { MemoryDispatcher } from "../src/services/dispatch";
 import { buildUsageService, buildWeeklyReport, type UsageService } from "../src/services/usage";
+import { buildLibsqlUsageStore } from "../src/services/usage/store_libsql";
 import { canonicalize, isoWeek } from "../src/services/usage/canonical";
 import type { Counters } from "../src/services/usage/verify";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { rmSync } from "node:fs";
 
 const subtle = webcrypto.subtle;
 const EC = { name: "ECDSA", namedCurve: "P-256" } as const;
@@ -110,7 +114,7 @@ describe("usage: submission verification (HTTP)", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true, status: "applied" });
 
-    const agg = ctx.usage.store.aggregateWeek(isoWeek(Date.now()));
+    const agg = await ctx.usage.store.aggregateWeek(isoWeek(Date.now()));
     expect(agg.counters.record_created).toBe(4);
     expect(agg.counters.evidence_added).toBe(7);
     expect(agg.identities).toBe(1);
@@ -191,7 +195,7 @@ describe("usage: replay / duplicate / sequence", () => {
     const res = await request(ctx.app).post("/v1/usage").send(s1b);
     expect(res.body.status).toBe("duplicate");
 
-    const agg = ctx.usage.store.aggregateWeek(isoWeek(Date.now()));
+    const agg = await ctx.usage.store.aggregateWeek(isoWeek(Date.now()));
     expect(agg.counters.record_created).toBe(3); // NOT 6
   });
 
@@ -205,13 +209,13 @@ describe("usage: replay / duplicate / sequence", () => {
 
     // A clean seq 2 with a fresh nonce is applied and added.
     await request(ctx.app).post("/v1/usage").send(await sign(id, { counters: { evidence_added: 5 }, seq: 2 }));
-    const agg = ctx.usage.store.aggregateWeek(isoWeek(Date.now()));
+    const agg = await ctx.usage.store.aggregateWeek(isoWeek(Date.now()));
     expect(agg.counters.evidence_added).toBe(7);
   });
 });
 
 describe("usage: aggregation + weekly bucketing + new/returning (store)", () => {
-  it("buckets by server week and distinguishes new vs returning identities", () => {
+  it("buckets by server week and distinguishes new vs returning identities", async () => {
     const usage = buildUsageService({ dbPath: ":memory:", maxSkewMs: 600000, nonceRetentionMs: 86400000 });
     const wk1 = "2026-W39";
     const wk2 = "2026-W40";
@@ -219,23 +223,23 @@ describe("usage: aggregation + weekly bucketing + new/returning (store)", () => 
     const w2 = Date.UTC(2026, 8, 30);
 
     // Two identities active in week 1.
-    usage.store.apply({ anonId: "A", pubKey: "pA", week: wk1, counters: { ...zero(), record_created: 2 }, seq: 1, nonce: "n1", now: w1 });
-    usage.store.apply({ anonId: "B", pubKey: "pB", week: wk1, counters: { ...zero(), evidence_added: 3 }, seq: 1, nonce: "n2", now: w1 });
+    await usage.store.apply({ anonId: "A", pubKey: "pA", week: wk1, counters: { ...zero(), record_created: 2 }, seq: 1, nonce: "n1", now: w1 });
+    await usage.store.apply({ anonId: "B", pubKey: "pB", week: wk1, counters: { ...zero(), evidence_added: 3 }, seq: 1, nonce: "n2", now: w1 });
     // Week 2: A returns, C is new.
-    usage.store.apply({ anonId: "A", pubKey: "pA", week: wk2, counters: { ...zero(), export_performed: 1 }, seq: 2, nonce: "n3", now: w2 });
-    usage.store.apply({ anonId: "C", pubKey: "pC", week: wk2, counters: { ...zero(), record_created: 1 }, seq: 1, nonce: "n4", now: w2 });
+    await usage.store.apply({ anonId: "A", pubKey: "pA", week: wk2, counters: { ...zero(), export_performed: 1 }, seq: 2, nonce: "n3", now: w2 });
+    await usage.store.apply({ anonId: "C", pubKey: "pC", week: wk2, counters: { ...zero(), record_created: 1 }, seq: 1, nonce: "n4", now: w2 });
 
-    const a1 = usage.store.aggregateWeek(wk1);
+    const a1 = await usage.store.aggregateWeek(wk1);
     expect(a1.identities).toBe(2);
     expect(a1.newIdentities).toBe(2);
     expect(a1.returningIdentities).toBe(0);
     expect(a1.counters.record_created).toBe(2);
 
-    const a2 = usage.store.aggregateWeek(wk2);
+    const a2 = await usage.store.aggregateWeek(wk2);
     expect(a2.identities).toBe(2); // A + C
     expect(a2.newIdentities).toBe(1); // C only (A first seen in wk1)
     expect(a2.returningIdentities).toBe(1); // A
-    usage.close();
+    await usage.close();
   });
 });
 
@@ -246,7 +250,7 @@ describe("usage: reports + rate limiting", () => {
       { week: "2026-W39", identities: 3, newIdentities: 3, returningIdentities: 0, counters: { ...zero(), record_created: 12 } },
       1,
     );
-    ctx.usage.store.putReport({
+    await ctx.usage.store.putReport({
       week: "2026-W39",
       version: 1,
       json: built.json,
@@ -285,5 +289,47 @@ describe("usage: reports + rate limiting", () => {
       codes.push(res.status);
     }
     expect(codes.filter((c) => c === 429).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("usage: libSQL backend parity (durable store)", () => {
+  it("applies, dedups, buckets and stores reports via libSQL (file mode)", async () => {
+    const path = join(tmpdir(), `foren-usage-libsql-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    const store = buildLibsqlUsageStore(`file:${path}`);
+    try {
+      const wk = "2026-W39";
+      const now = Date.UTC(2026, 8, 23);
+      const z = zero();
+      expect((await store.apply({ anonId: "A", pubKey: "pA", week: wk, counters: { ...z, record_created: 4 }, seq: 1, nonce: "x1", now })).status).toBe("applied");
+      // Idempotent retry (seq not advanced) — must not double count.
+      expect((await store.apply({ anonId: "A", pubKey: "pA", week: wk, counters: { ...z, record_created: 4 }, seq: 1, nonce: "x2", now })).status).toBe("duplicate");
+      // Nonce reuse rejected.
+      expect((await store.apply({ anonId: "A", pubKey: "pA", week: wk, counters: { ...z, record_created: 4 }, seq: 2, nonce: "x1", now })).status).toBe("nonce_reused");
+      // A second identity + a real seq-2 delta.
+      await store.apply({ anonId: "B", pubKey: "pB", week: wk, counters: { ...z, evidence_added: 7 }, seq: 1, nonce: "x3", now });
+      await store.apply({ anonId: "A", pubKey: "pA", week: wk, counters: { ...z, record_created: 1 }, seq: 2, nonce: "x4", now });
+
+      const agg = await store.aggregateWeek(wk);
+      expect(agg.identities).toBe(2);
+      expect(agg.newIdentities).toBe(2);
+      expect(agg.counters.record_created).toBe(5); // 4 + 1, retry not counted
+      expect(agg.counters.evidence_added).toBe(7);
+
+      const built = buildWeeklyReport(agg, 1);
+      await store.putReport({
+        week: wk, version: 1, json: built.json, sha256: built.sha256,
+        chainTx: "TX", chainCluster: "devnet", chainExplorer: "e", chainProgram: "p", chainRecordPda: "pda",
+        createdAt: now,
+      });
+      expect(await store.listReportWeeks()).toContain(wk);
+      const rep = await store.getReport(wk);
+      expect(rep?.sha256).toBe(built.sha256);
+      expect(createHash("sha256").update(rep!.json, "utf8").digest("hex")).toBe(built.sha256);
+      await store.close();
+    } finally {
+      for (const suffix of ["", "-shm", "-wal"]) {
+        try { rmSync(path + suffix); } catch { /* ignore */ }
+      }
+    }
   });
 });

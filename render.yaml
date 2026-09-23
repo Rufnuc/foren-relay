@@ -27,3 +27,11 @@ services:
       # sync:false = you set it by hand in the dashboard so it stays a secret.
       - key: RELAY_SOLANA_SECRET
         sync: false
+      # Durable usage storage (free): create a Turso database (turso.tech),
+      # then paste its URL + auth token here in the dashboard. Without these the
+      # relay falls back to local SQLite, which is EPHEMERAL on the free plan
+      # (usage counts + weekly reports reset on every redeploy).
+      - key: USAGE_LIBSQL_URL
+        sync: false
+      - key: USAGE_LIBSQL_AUTH_TOKEN
+        sync: false
