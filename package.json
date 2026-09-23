@@ -9,6 +9,7 @@
     "dev:watch": "nodemon --watch src --ext ts,json --exec \"tsx src/index.ts\"",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
+    "usage:report": "tsx scripts/weekly-report.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "prettier --check 'src/**/*.ts' 'test/**/*.ts'",

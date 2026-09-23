@@ -77,6 +77,21 @@ const Schema = z.object({
   SOLANA_PAY_RECIPIENT: z.string().optional(),
   SOLANA_PAY_USDC_MINT: z.string().optional(),
 
+  // Anonymous usage tracking (privacy-preserving; counts only). Disabled means
+  // the /v1/usage routes are not mounted at all.
+  USAGE_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  // SQLite database file. On ephemeral hosts (Render free tier) mount a
+  // persistent disk and point this at it, or weekly data resets on redeploy.
+  USAGE_DB_PATH: z.string().default("./data/usage.db"),
+  // How far a submission's issuedAt may be from server time (replay freshness).
+  USAGE_MAX_SKEW_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
+  // How long replay nonces are retained (>= max skew). Older nonces are pruned.
+  USAGE_NONCE_RETENTION_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
+  RATE_LIMIT_USAGE_PER_MIN: z.coerce.number().int().positive().default(30),
+
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
