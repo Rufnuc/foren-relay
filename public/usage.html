@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Foren — Weekly Usage Verification</title>
+    <style>
+      :root { --fg: #111; --muted: #666; --line: #e2e2e2; --ok: #12752f; --bad: #b00020; --bg: #fff; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0; background: var(--bg); color: var(--fg);
+        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      }
+      .wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 80px; }
+      h1 { font-size: 22px; letter-spacing: .04em; margin: 0 0 4px; }
+      .sub { color: var(--muted); margin: 0 0 28px; font-size: 13px; }
+      label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 6px; }
+      select { width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; font: inherit; }
+      .card { border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-top: 20px; }
+      .period { font-size: 13px; color: var(--muted); margin: 0 0 16px; }
+      table { width: 100%; border-collapse: collapse; }
+      td { padding: 8px 0; border-bottom: 1px solid var(--line); }
+      td.n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+      tr:last-child td { border-bottom: none; }
+      .hashrow { margin-top: 18px; }
+      .hashrow div { margin-top: 10px; }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-all; color: #222; }
+      .status { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-radius: 10px; margin-top: 18px; font-weight: 600; }
+      .status.ok { background: #eafaef; color: var(--ok); }
+      .status.bad { background: #fdeaee; color: var(--bad); }
+      .status.wait { background: #f4f4f4; color: var(--muted); }
+      a { color: #111; }
+      .note { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 28px; padding-top: 18px; }
+      .empty { color: var(--muted); padding: 24px 0; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>FOREN WEEKLY USAGE</h1>
+      <p class="sub">
+        Public verification of aggregate, anonymous product-usage reports and their blockchain commitments.
+      </p>
+
+      <label for="week">Reporting period</label>
+      <select id="week"><option>Loading…</option></select>
+
+      <div id="content"></div>
+
+      <p class="note" id="disclaimer">
+        This report contains aggregate usage statistics generated from anonymous cryptographic identities. An anonymous
+        identity does not necessarily represent a unique human — one person may create several. The blockchain
+        commitment verifies the integrity and existence of this report at a point in time; it does not independently
+        verify that every underlying action was performed by a different person, that any action was performed by a
+        human at all, or that any incident record is truthful, legally admissible, or otherwise validated.
+      </p>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      function metricRows(m) {
+        return [
+          ["Anonymous identities with qualifying activity", m.anonymous_identities],
+          ["New anonymous identities", m.new_anonymous_identities],
+          ["Returning anonymous identities", m.returning_anonymous_identities],
+          ["Records created", m.records_created],
+          ["Records updated", m.records_updated],
+          ["Evidence items added", m.evidence_added],
+          ["Verification operations", m.verification_operations],
+          ["Exports", m.exports],
+        ];
+      }
+
+      function toHex(buf) {
+        return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+      }
+
+      async function sha256Hex(str) {
+        const data = new TextEncoder().encode(str);
+        return toHex(await crypto.subtle.digest("SHA-256", data));
+      }
+
+      function rpcForCluster(cluster) {
+        if (cluster === "mainnet-beta") return "https://api.mainnet-beta.solana.com";
+        if (cluster === "testnet") return "https://api.testnet.solana.com";
+        return "https://api.devnet.solana.com";
+      }
+
+      // AnchorRecord layout: 8-byte discriminator, owner[32], hash[32], ...
+      const HASH_OFFSET = 8 + 32;
+
+      async function onChainHash(recordPda, cluster) {
+        const res = await fetch(rpcForCluster(cluster), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getAccountInfo",
+            params: [recordPda, { encoding: "base64" }],
+          }),
+        });
+        const json = await res.json();
+        const b64 = json?.result?.value?.data?.[0];
+        if (!b64) return null;
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        return toHex(bytes.slice(HASH_OFFSET, HASH_OFFSET + 32));
+      }
+
+      async function loadWeek(week) {
+        const content = $("content");
+        content.innerHTML = '<div class="empty">Loading…</div>';
+        let data;
+        try {
+          data = await (await fetch(`/v1/usage/reports/${encodeURIComponent(week)}`)).json();
+        } catch {
+          content.innerHTML = '<div class="empty">Could not load this report.</div>';
+          return;
+        }
+
+        const m = data.report.metrics;
+        const rows = metricRows(m)
+          .map(([k, v]) => `<tr><td>${k}</td><td class="n">${v}</td></tr>`)
+          .join("");
+
+        const c = data.commitment || {};
+        const explorer = c.explorer
+          ? `<a href="${c.explorer}" target="_blank" rel="noopener">${c.tx || "view transaction"}</a>`
+          : c.tx || "(not anchored)";
+
+        content.innerHTML = `
+          <div class="card">
+            <p class="period">Period: ${data.report.period.start} – ${data.report.period.end}
+              &nbsp;·&nbsp; ${data.week} &nbsp;·&nbsp; report v${data.version}</p>
+            <table>${rows}</table>
+            <div class="hashrow">
+              <div><label>Report hash (recomputed in your browser)</label><code id="localHash">…</code></div>
+              <div><label>Published hash</label><code>${data.sha256}</code></div>
+              <div><label>Blockchain commitment (${c.cluster || "—"})</label><code id="chainHash">…</code></div>
+              <div><label>Transaction</label><code>${explorer}</code></div>
+            </div>
+            <div class="status wait" id="statusLocal">Recomputing hash…</div>
+            <div class="status wait" id="statusChain">Reading blockchain…</div>
+          </div>`;
+
+        // 1) Recompute the hash from the exact published JSON and compare.
+        const local = await sha256Hex(data.reportJson);
+        $("localHash").textContent = local;
+        const localOk = local === data.sha256;
+        const sl = $("statusLocal");
+        sl.className = "status " + (localOk ? "ok" : "bad");
+        sl.textContent = localOk
+          ? "✓ Recomputed hash matches the published report"
+          : "✗ Recomputed hash does NOT match the published report";
+
+        // 2) Read the committed hash from the blockchain and compare.
+        const sc = $("statusChain");
+        if (!c.recordPda) {
+          sc.className = "status wait";
+          sc.textContent = "No blockchain commitment recorded for this report.";
+          return;
+        }
+        try {
+          const chain = await onChainHash(c.recordPda, c.cluster);
+          if (!chain) throw new Error("no account");
+          $("chainHash").textContent = chain;
+          const chainOk = chain === data.sha256 && localOk;
+          sc.className = "status " + (chainOk ? "ok" : "bad");
+          sc.textContent = chainOk
+            ? "✓ Report matches the cryptographic commitment on the blockchain"
+            : "✗ Report does NOT match the blockchain commitment";
+        } catch {
+          sc.className = "status wait";
+          sc.textContent = "Could not read the on-chain record right now (public RPC unavailable). Retry later.";
+          $("chainHash").textContent = "(unavailable)";
+        }
+      }
+
+      async function init() {
+        let weeks = [];
+        try {
+          weeks = (await (await fetch("/v1/usage/reports")).json()).weeks || [];
+        } catch {
+          /* ignore */
+        }
+        const sel = $("week");
+        if (!weeks.length) {
+          sel.innerHTML = "<option>No reports published yet</option>";
+          $("content").innerHTML = '<div class="empty">No weekly reports have been published yet.</div>';
+          return;
+        }
+        // Newest first.
+        weeks.sort().reverse();
+        sel.innerHTML = weeks.map((w) => `<option value="${w}">${w}</option>`).join("");
+        sel.addEventListener("change", () => loadWeek(sel.value));
+        loadWeek(weeks[0]);
+      }
+
+      init();
+    </script>
+  </body>
+</html>

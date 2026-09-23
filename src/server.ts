@@ -1,3 +1,4 @@
+import path from "node:path";
 import express, { type Express } from "express";
 import pinoHttp from "pino-http";
 import type { Logger } from "pino";
@@ -9,7 +10,9 @@ import { emergencyRouter } from "./routes/emergency";
 import { anchorRouter } from "./routes/anchor";
 import { zkRouter } from "./routes/zk";
 import { paymentsRouter } from "./routes/payments";
+import { usageRouter } from "./routes/usage";
 import { healthRouter } from "./routes/health";
+import { buildUsageService, type UsageService } from "./services/usage";
 import { errorHandler } from "./util/errors";
 import {
   buildPinningProvider,
@@ -30,6 +33,7 @@ export interface ServerDeps {
   bitcoin?: BitcoinAnchorService;
   zk?: ZkService;
   payments?: Payments;
+  usage?: UsageService; // injectable for tests (e.g. an in-memory db)
 }
 
 /**
@@ -44,6 +48,7 @@ export function buildApp(deps: ServerDeps): {
   bitcoin: BitcoinAnchorService;
   zk: ZkService;
   payments: Payments;
+  usage: UsageService | null;
 } {
   const pinning = deps.pinning ?? buildPinningProvider(deps.cfg);
   const dispatcher = deps.dispatcher ?? buildDispatcher(deps.cfg);
@@ -51,6 +56,18 @@ export function buildApp(deps: ServerDeps): {
   const bitcoin = deps.bitcoin ?? buildBitcoinAnchorService(deps.logger);
   const zk = deps.zk ?? buildZkService(deps.cfg, deps.logger);
   const payments = deps.payments ?? buildPayments(deps.cfg, anchor.rpcUrl);
+  const usage =
+    deps.usage ??
+    (deps.cfg.USAGE_ENABLED
+      ? buildUsageService(
+          {
+            dbPath: deps.cfg.USAGE_DB_PATH,
+            maxSkewMs: deps.cfg.USAGE_MAX_SKEW_MS,
+            nonceRetentionMs: deps.cfg.USAGE_NONCE_RETENTION_MS,
+          },
+          deps.logger,
+        )
+      : null);
   const app = express();
 
   app.set("trust proxy", deps.cfg.NODE_ENV === "production" ? 1 : false);
@@ -60,7 +77,10 @@ export function buildApp(deps: ServerDeps): {
   app.use(
     pinoHttp({
       logger: deps.logger,
-      autoLogging: { ignore: (req) => req.url === "/livez" },
+      // Do not access-log usage submissions: it keeps client IPs out of the
+      // application logs, so usage tracking can never become an IP analytics
+      // system. (Health checks are also skipped.)
+      autoLogging: { ignore: (req) => req.url === "/livez" || req.url === "/v1/usage" },
     }),
   );
 
@@ -84,6 +104,30 @@ export function buildApp(deps: ServerDeps): {
   app.use("/v1/anchor", anchorRouter({ cfg: deps.cfg, anchor, bitcoin }));
   app.use("/v1/zk", zkRouter({ cfg: deps.cfg, zk }));
   app.use("/v1/pay", paymentsRouter({ cfg: deps.cfg, payments }));
+  if (usage) {
+    app.use("/v1/usage", usageRouter({ cfg: deps.cfg, usage }));
+    // Standalone public verification page (neutral, aggregate-only, self-
+    // contained HTML). Served at /usage. The global helmet CSP is `default-src
+    // 'none'`, which blocks this page's inline script/style; override it with a
+    // tailored policy for just this response. Inline is acceptable here: the
+    // page takes no user input, sets no cookies, holds no secrets, and renders
+    // only server-provided aggregate numbers. connect-src permits the same-
+    // origin report API plus the public Solana RPCs used for the on-chain check.
+    app.get("/usage", (_req, res) => {
+      res.setHeader(
+        "Content-Security-Policy",
+        [
+          "default-src 'none'",
+          "script-src 'unsafe-inline'",
+          "style-src 'unsafe-inline'",
+          "connect-src 'self' https://api.devnet.solana.com https://api.mainnet-beta.solana.com https://api.testnet.solana.com",
+          "base-uri 'none'",
+          "form-action 'none'",
+        ].join("; "),
+      );
+      res.sendFile(path.join(process.cwd(), "public", "usage.html"));
+    });
+  }
 
   // Catch-all 404 (after routes).
   app.use((_req, res) => res.status(404).json({ error: "not found", code: "not_found" }));
@@ -91,5 +135,5 @@ export function buildApp(deps: ServerDeps): {
   // Global error handler — must be last.
   app.use(errorHandler);
 
-  return { app, pinning, dispatcher, anchor, bitcoin, zk, payments };
+  return { app, pinning, dispatcher, anchor, bitcoin, zk, payments, usage };
 }

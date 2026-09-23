@@ -5,3 +5,9 @@ dist/
 .env
 .env.*
 *.log
+
+# usage-tracking SQLite database (runtime data — never commit)
+data/
+*.db
+*.db-shm
+*.db-wal
