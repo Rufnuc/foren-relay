@@ -6,7 +6,9 @@ services:
     name: foren-relay
     runtime: node
     plan: free # free sleeps after ~15 min idle (slow first request); "starter" (~$7/mo) stays awake
-    buildCommand: npm install && npm run build
+    # --include=dev forces devDependencies (typescript + @types/*) to install even
+    # though NODE_ENV=production would otherwise skip them — they're needed to compile.
+    buildCommand: npm install --include=dev && npm run build
     startCommand: node dist/index.js
     healthCheckPath: /livez
     envVars:
