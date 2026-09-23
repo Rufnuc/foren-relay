@@ -64,6 +64,8 @@ export function buildApp(deps: ServerDeps): {
             dbPath: deps.cfg.USAGE_DB_PATH,
             maxSkewMs: deps.cfg.USAGE_MAX_SKEW_MS,
             nonceRetentionMs: deps.cfg.USAGE_NONCE_RETENTION_MS,
+            libsqlUrl: deps.cfg.USAGE_LIBSQL_URL || undefined,
+            libsqlAuthToken: deps.cfg.USAGE_LIBSQL_AUTH_TOKEN || undefined,
           },
           deps.logger,
         )

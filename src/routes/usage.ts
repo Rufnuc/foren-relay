@@ -39,30 +39,38 @@ export function usageRouter(deps: { cfg: Config; usage: UsageService }) {
     }
   });
 
-  r.get("/reports", (_req, res) => {
-    res.json({ weeks: deps.usage.store.listReportWeeks() });
+  r.get("/reports", async (_req, res, next) => {
+    try {
+      res.json({ weeks: await deps.usage.store.listReportWeeks() });
+    } catch (err) {
+      next(err);
+    }
   });
 
-  r.get("/reports/:week", (req, res) => {
-    const row = deps.usage.store.getReport(req.params.week);
-    if (!row) return res.status(404).json({ error: "no report for that week", code: "not_found" });
-    // `report` is the exact published JSON (already-canonical string). The
-    // public page re-hashes it and compares to `sha256` and the on-chain value.
-    res.json({
-      week: row.week,
-      version: row.version,
-      report: JSON.parse(row.json),
-      reportJson: row.json,
-      sha256: row.sha256,
-      commitment: {
-        cluster: row.chainCluster,
-        tx: row.chainTx,
-        explorer: row.chainExplorer,
-        programId: row.chainProgram,
-        recordPda: row.chainRecordPda,
-      },
-      createdAt: row.createdAt,
-    });
+  r.get("/reports/:week", async (req, res, next) => {
+    try {
+      const row = await deps.usage.store.getReport(req.params.week);
+      if (!row) return res.status(404).json({ error: "no report for that week", code: "not_found" });
+      // `report` is the exact published JSON (already-canonical string). The
+      // public page re-hashes it and compares to `sha256` and the on-chain value.
+      res.json({
+        week: row.week,
+        version: row.version,
+        report: JSON.parse(row.json),
+        reportJson: row.json,
+        sha256: row.sha256,
+        commitment: {
+          cluster: row.chainCluster,
+          tx: row.chainTx,
+          explorer: row.chainExplorer,
+          programId: row.chainProgram,
+          recordPda: row.chainRecordPda,
+        },
+        createdAt: row.createdAt,
+      });
+    } catch (err) {
+      next(err);
+    }
   });
 
   return r;

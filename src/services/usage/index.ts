@@ -4,7 +4,8 @@
 
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
-import { buildUsageStore, type UsageStore, type WeekAggregate } from "./store";
+import { buildLocalUsageStore, type UsageStore, type WeekAggregate } from "./store";
+import { buildLibsqlUsageStore } from "./store_libsql";
 import { verifySubmission, type VerifyResult } from "./verify";
 import { canonicalize, isoWeek, isoWeekRange } from "./canonical";
 
@@ -12,6 +13,9 @@ export interface UsageServiceConfig {
   dbPath: string;
   maxSkewMs: number;
   nonceRetentionMs: number;
+  // When set, use the durable libSQL/Turso backend instead of local SQLite.
+  libsqlUrl?: string;
+  libsqlAuthToken?: string;
 }
 
 /** The public, deterministic weekly report object. */
@@ -70,13 +74,16 @@ export function buildWeeklyReport(agg: WeekAggregate, version = 1): BuiltReport 
 export interface UsageService {
   readonly store: UsageStore;
   submit(body: unknown, now?: number): Promise<{ status: string; code?: string; message?: string }>;
-  buildReportForWeek(week: string, version?: number): BuiltReport;
+  buildReportForWeek(week: string, version?: number): Promise<BuiltReport>;
   currentWeek(now?: number): string;
-  close(): void;
+  close(): Promise<void>;
 }
 
 export function buildUsageService(cfg: UsageServiceConfig, logger?: Logger): UsageService {
-  const store = buildUsageStore(cfg.dbPath);
+  const store: UsageStore = cfg.libsqlUrl
+    ? buildLibsqlUsageStore(cfg.libsqlUrl, cfg.libsqlAuthToken)
+    : buildLocalUsageStore(cfg.dbPath);
+  if (cfg.libsqlUrl) logger?.info("usage: using durable libSQL backend");
 
   return {
     store,
@@ -86,7 +93,7 @@ export function buildUsageService(cfg: UsageServiceConfig, logger?: Logger): Usa
       if (!res.ok) return { status: "rejected", code: res.code, message: res.message };
 
       const week = isoWeek(now);
-      const applied = store.apply({
+      const applied = await store.apply({
         anonId: res.sub.anonId,
         pubKey: res.sub.pubKey,
         week,
@@ -99,23 +106,23 @@ export function buildUsageService(cfg: UsageServiceConfig, logger?: Logger): Usa
       // Opportunistic housekeeping: drop nonces older than the freshness window
       // (a replay that old is already rejected by the timestamp check).
       try {
-        store.pruneNonces(now - cfg.nonceRetentionMs);
+        await store.pruneNonces(now - cfg.nonceRetentionMs);
       } catch (err) {
         logger?.warn({ err }, "usage: nonce prune failed");
       }
       return { status: applied.status };
     },
 
-    buildReportForWeek(week: string, version = 1): BuiltReport {
-      return buildWeeklyReport(store.aggregateWeek(week), version);
+    async buildReportForWeek(week: string, version = 1): Promise<BuiltReport> {
+      return buildWeeklyReport(await store.aggregateWeek(week), version);
     },
 
     currentWeek(now = Date.now()): string {
       return isoWeek(now);
     },
 
-    close(): void {
-      store.close();
+    close(): Promise<void> {
+      return store.close();
     },
   };
 }

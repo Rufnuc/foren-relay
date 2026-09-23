@@ -64,16 +64,56 @@ export interface ReportRow {
   createdAt: number;
 }
 
+// Async so the interface fits both the local synchronous node:sqlite backend
+// and the remote (async) libSQL/Turso backend.
 export interface UsageStore {
-  apply(input: ApplyInput): ApplyResult;
-  aggregateWeek(week: string): WeekAggregate;
-  listReportWeeks(): string[];
-  getReport(week: string): ReportRow | undefined;
-  putReport(row: ReportRow): void;
-  pruneNonces(olderThanMs: number): number;
-  close(): void;
-  readonly db: SqliteDb;
+  apply(input: ApplyInput): Promise<ApplyResult>;
+  aggregateWeek(week: string): Promise<WeekAggregate>;
+  listReportWeeks(): Promise<string[]>;
+  getReport(week: string): Promise<ReportRow | undefined>;
+  putReport(row: ReportRow): Promise<void>;
+  pruneNonces(olderThanMs: number): Promise<number>;
+  close(): Promise<void>;
 }
+
+export const USAGE_SCHEMA_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS identity (
+  anon_id TEXT PRIMARY KEY,
+  pub_key TEXT NOT NULL,
+  first_seen_week TEXT NOT NULL,
+  last_seq INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)`,
+  `CREATE TABLE IF NOT EXISTS identity_week (
+  week TEXT NOT NULL,
+  anon_id TEXT NOT NULL,
+  PRIMARY KEY (week, anon_id)
+)`,
+  `CREATE TABLE IF NOT EXISTS weekly_counter (
+  week TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  PRIMARY KEY (week, kind)
+)`,
+  `CREATE TABLE IF NOT EXISTS nonce (
+  nonce TEXT PRIMARY KEY,
+  seen_at INTEGER NOT NULL
+)`,
+  `CREATE INDEX IF NOT EXISTS idx_nonce_seen ON nonce(seen_at)`,
+  `CREATE TABLE IF NOT EXISTS report (
+  week TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,
+  json TEXT NOT NULL,
+  sha256 TEXT NOT NULL,
+  chain_tx TEXT,
+  chain_cluster TEXT,
+  chain_explorer TEXT,
+  chain_program TEXT,
+  chain_record_pda TEXT,
+  created_at INTEGER NOT NULL
+)`,
+];
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS identity (
@@ -114,7 +154,10 @@ CREATE TABLE IF NOT EXISTS report (
 );
 `;
 
-export function buildUsageStore(path: string): UsageStore {
+// Local (synchronous) node:sqlite backend. Used for dev, tests (":memory:"),
+// and any deployment with a persistent disk. The public methods are async to
+// satisfy the shared UsageStore interface; the bodies run synchronously.
+export function buildLocalUsageStore(path: string): UsageStore {
   // Ensure the parent directory exists for a file-backed DB (":memory:" skips).
   if (path !== ":memory:") {
     try {
@@ -140,7 +183,7 @@ export function buildUsageStore(path: string): UsageStore {
     "INSERT INTO weekly_counter(week, kind, count) VALUES (?,?,?) ON CONFLICT(week, kind) DO UPDATE SET count = count + excluded.count",
   );
 
-  function apply(input: ApplyInput): ApplyResult {
+  function applySync(input: ApplyInput): ApplyResult {
     // node:sqlite has no transaction() helper — drive it explicitly so the
     // nonce/seq checks and the counter writes commit atomically.
     db.exec("BEGIN IMMEDIATE");
@@ -183,10 +226,11 @@ export function buildUsageStore(path: string): UsageStore {
   const countNew = db.prepare("SELECT COUNT(*) AS n FROM identity WHERE first_seen_week = ?");
 
   return {
-    db,
-    apply,
+    async apply(input: ApplyInput): Promise<ApplyResult> {
+      return applySync(input);
+    },
 
-    aggregateWeek(week: string): WeekAggregate {
+    async aggregateWeek(week: string): Promise<WeekAggregate> {
       const counters = {} as Counters;
       for (const k of COUNTER_KINDS) counters[k] = 0;
       for (const row of aggCounters.all(week) as { kind: string; count: number }[]) {
@@ -203,11 +247,11 @@ export function buildUsageStore(path: string): UsageStore {
       };
     },
 
-    listReportWeeks(): string[] {
+    async listReportWeeks(): Promise<string[]> {
       return (db.prepare("SELECT week FROM report ORDER BY week ASC").all() as { week: string }[]).map((r) => r.week);
     },
 
-    getReport(week: string): ReportRow | undefined {
+    async getReport(week: string): Promise<ReportRow | undefined> {
       const r = db.prepare("SELECT * FROM report WHERE week = ?").get(week) as Record<string, unknown> | undefined;
       if (!r) return undefined;
       return {
@@ -224,7 +268,7 @@ export function buildUsageStore(path: string): UsageStore {
       };
     },
 
-    putReport(row: ReportRow): void {
+    async putReport(row: ReportRow): Promise<void> {
       db.prepare(
         `INSERT INTO report(week, version, json, sha256, chain_tx, chain_cluster, chain_explorer, chain_program, chain_record_pda, created_at)
          VALUES (?,?,?,?,?,?,?,?,?,?)
@@ -246,11 +290,11 @@ export function buildUsageStore(path: string): UsageStore {
       );
     },
 
-    pruneNonces(olderThanMs: number): number {
+    async pruneNonces(olderThanMs: number): Promise<number> {
       return Number(db.prepare("DELETE FROM nonce WHERE seen_at < ?").run(olderThanMs).changes);
     },
 
-    close(): void {
+    async close(): Promise<void> {
       db.close();
     },
   };
