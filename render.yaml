@@ -18,10 +18,11 @@ services:
         value: devnet
       - key: PINNING_PROVIDER
         value: noop
-      # The Capacitor mobile app's web origin (Android + iOS). Requests from the
-      # app must be allowed through CORS.
+      # Allowed request origins: the Capacitor mobile app (https://localhost,
+      # capacitor://localhost) AND the deployed web PWA. Update the PWA URL here
+      # if Render assigns a different one.
       - key: CORS_ORIGINS
-        value: https://localhost,capacitor://localhost
+        value: https://localhost,capacitor://localhost,https://foren-app.onrender.com
       # The devnet signing key (JSON array from relay/.solana-keypair.json).
       # sync:false = you set it by hand in the dashboard so it stays a secret.
       - key: RELAY_SOLANA_SECRET
