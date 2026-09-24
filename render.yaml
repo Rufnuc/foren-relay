@@ -19,10 +19,10 @@ services:
       - key: PINNING_PROVIDER
         value: noop
       # Allowed request origins: the Capacitor mobile app (https://localhost,
-      # capacitor://localhost) AND the deployed web PWA. Update the PWA URL here
-      # if Render assigns a different one.
+      # capacitor://localhost) AND the web PWA — the custom domain plus the
+      # onrender.com fallback (kept so nothing breaks during the DNS cutover).
       - key: CORS_ORIGINS
-        value: https://localhost,capacitor://localhost,https://foren-app.onrender.com
+        value: https://localhost,capacitor://localhost,https://app.forenlabs.co.uk,https://foren-app.onrender.com
       # The devnet signing key (JSON array from relay/.solana-keypair.json).
       # sync:false = you set it by hand in the dashboard so it stays a secret.
       - key: RELAY_SOLANA_SECRET
