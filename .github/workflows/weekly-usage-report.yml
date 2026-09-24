@@ -10,7 +10,7 @@ name: Weekly usage report
 #      random value (e.g. `openssl rand -hex 32`).
 #   2. In this GitHub repo → Settings → Secrets and variables → Actions:
 #        - Secret  USAGE_ADMIN_TOKEN   = the same value
-#        - Variable RELAY_BASE_URL     = https://foren-relay.onrender.com  (optional; this is the default)
+#        - Variable RELAY_BASE_URL     = https://relay.forenlabs.co.uk  (optional; this is the default)
 #   3. Trigger it manually once (Actions tab → this workflow → Run workflow) to test.
 
 on:
@@ -29,7 +29,7 @@ jobs:
     steps:
       - name: Call the relay's report endpoint
         env:
-          RELAY_BASE_URL: ${{ vars.RELAY_BASE_URL || 'https://foren-relay.onrender.com' }}
+          RELAY_BASE_URL: ${{ vars.RELAY_BASE_URL || 'https://relay.forenlabs.co.uk' }}
           USAGE_ADMIN_TOKEN: ${{ secrets.USAGE_ADMIN_TOKEN }}
           WEEK: ${{ github.event.inputs.week }}
         run: |
