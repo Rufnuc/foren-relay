@@ -4,6 +4,7 @@
 
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
+import type { AnchorService } from "../anchor";
 import { buildLocalUsageStore, type UsageStore, type WeekAggregate } from "./store";
 import { buildLibsqlUsageStore } from "./store_libsql";
 import { verifySubmission, type VerifyResult } from "./verify";
@@ -69,6 +70,71 @@ export function buildWeeklyReport(agg: WeekAggregate, version = 1): BuiltReport 
   const json = canonicalize(report);
   const sha256 = createHash("sha256").update(json, "utf8").digest("hex");
   return { report, json, sha256 };
+}
+
+export interface FinalizeResult {
+  week: string;
+  version: number;
+  sha256: string;
+  metrics: WeeklyReport["metrics"];
+  anchored: boolean;
+  chainTx: string | null;
+  chainExplorer: string | null;
+  error?: string;
+}
+
+/**
+ * Finalise a week: build the deterministic report (bumping the version if one
+ * already exists — a versioned correction, never a silent edit), anchor ONLY
+ * its SHA-256 on-chain, and store it. Shared by the CLI script and the admin
+ * endpoint so both behave identically. Anchoring failure is non-fatal: the
+ * report is still stored (commitment null) so it can be re-anchored later.
+ */
+export async function finalizeWeeklyReport(
+  usage: UsageService,
+  anchor: AnchorService,
+  week: string,
+  logger?: Logger,
+  now: number = Date.now(),
+): Promise<FinalizeResult> {
+  const existing = await usage.store.getReport(week);
+  const version = existing ? existing.version + 1 : 1;
+  const built = await usage.buildReportForWeek(week, version);
+
+  let anchored = false;
+  let chainTx: string | null = null;
+  let chainExplorer: string | null = null;
+  let chainCluster: string | null = null;
+  let chainProgram: string | null = null;
+  let chainRecordPda: string | null = null;
+  let error: string | undefined;
+  try {
+    const res = await anchor.anchorRoot(built.sha256);
+    anchored = true;
+    chainTx = res.signature;
+    chainExplorer = res.explorer;
+    chainCluster = res.cluster;
+    chainProgram = res.programId;
+    chainRecordPda = res.recordPda;
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    logger?.error({ err, week }, "usage: anchoring failed — storing report without commitment");
+  }
+
+  await usage.store.putReport({
+    week,
+    version,
+    json: built.json,
+    sha256: built.sha256,
+    chainTx,
+    chainCluster,
+    chainExplorer,
+    chainProgram,
+    chainRecordPda,
+    createdAt: now,
+  });
+
+  return { week, version, sha256: built.sha256, metrics: built.report.metrics, anchored, chainTx, chainExplorer, error };
 }
 
 export interface UsageService {

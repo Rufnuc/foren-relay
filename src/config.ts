@@ -95,6 +95,12 @@ const Schema = z.object({
   // How long replay nonces are retained (>= max skew). Older nonces are pruned.
   USAGE_NONCE_RETENTION_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
   RATE_LIMIT_USAGE_PER_MIN: z.coerce.number().int().positive().default(30),
+  // Bearer token that authorises POST /v1/usage/report/run (weekly report
+  // finalisation + on-chain anchoring). Unset = the endpoint is disabled. Set a
+  // long random value in the dashboard and give the same value to the scheduler
+  // (GitHub Action). Report generation runs IN the relay, so the Solana key and
+  // the database never leave it.
+  USAGE_ADMIN_TOKEN: z.string().default(""),
 
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])

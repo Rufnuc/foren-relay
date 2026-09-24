@@ -1,7 +1,10 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
+import { timingSafeEqual } from "node:crypto";
 import type { Config } from "../config";
-import type { UsageService } from "../services/usage";
+import type { AnchorService } from "../services/anchor";
+import { finalizeWeeklyReport, type UsageService } from "../services/usage";
+import { isoWeek } from "../services/usage/canonical";
 
 /**
  * Anonymous usage tracking + public weekly reports.
@@ -14,8 +17,19 @@ import type { UsageService } from "../services/usage";
  * signed by an anonymous key. See services/usage/verify.ts for the trust
  * boundary.
  */
-export function usageRouter(deps: { cfg: Config; usage: UsageService }) {
+export function usageRouter(deps: { cfg: Config; usage: UsageService; anchor: AnchorService }) {
   const r = Router();
+
+  // Bearer-token check for the admin report endpoint (constant-time compare).
+  function adminAuthorized(req: import("express").Request): boolean {
+    const token = deps.cfg.USAGE_ADMIN_TOKEN;
+    if (!token) return false; // endpoint disabled when unset
+    const header = req.get("authorization") ?? "";
+    const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
+    const a = Buffer.from(presented);
+    const b = Buffer.from(token);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
 
   const submitLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -34,6 +48,35 @@ export function usageRouter(deps: { cfg: Config; usage: UsageService }) {
       // applied | duplicate | nonce_reused — all are acknowledged 200 so the
       // client stops retrying (duplicates are the exactly-once success case).
       return res.status(200).json({ ok: true, status: result.status });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Finalise + anchor a weekly report, IN the relay (so the Solana key and the
+  // database never leave it). Triggered by the scheduler (GitHub Action) or
+  // manually. Auth: Authorization: Bearer <USAGE_ADMIN_TOKEN>. Body (optional):
+  //   { "week": "2026-W39" }  explicit week, or
+  //   { "current": true }     the current (in-progress) week, else the previous
+  //                           complete week (the default for a weekly cron).
+  r.post("/report/run", async (req, res, next) => {
+    try {
+      if (!deps.cfg.USAGE_ADMIN_TOKEN) {
+        return res.status(404).json({ error: "not found", code: "not_found" });
+      }
+      if (!adminAuthorized(req)) {
+        return res.status(401).json({ error: "unauthorized", code: "unauthorized" });
+      }
+      const body = (req.body ?? {}) as { week?: string; current?: boolean };
+      const now = Date.now();
+      const week =
+        typeof body.week === "string" && /^\d{4}-W\d{2}$/.test(body.week)
+          ? body.week
+          : body.current
+            ? isoWeek(now)
+            : isoWeek(now - 7 * 24 * 60 * 60 * 1000); // previous complete week
+      const result = await finalizeWeeklyReport(deps.usage, deps.anchor, week, undefined, now);
+      return res.status(result.anchored ? 200 : 202).json(result);
     } catch (err) {
       next(err);
     }
