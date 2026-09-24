@@ -107,7 +107,7 @@ export function buildApp(deps: ServerDeps): {
   app.use("/v1/zk", zkRouter({ cfg: deps.cfg, zk }));
   app.use("/v1/pay", paymentsRouter({ cfg: deps.cfg, payments }));
   if (usage) {
-    app.use("/v1/usage", usageRouter({ cfg: deps.cfg, usage }));
+    app.use("/v1/usage", usageRouter({ cfg: deps.cfg, usage, anchor }));
     // Standalone public verification page (neutral, aggregate-only, self-
     // contained HTML). Served at /usage. The global helmet CSP is `default-src
     // 'none'`, which blocks this page's inline script/style; override it with a

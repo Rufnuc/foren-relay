@@ -66,13 +66,30 @@ async function sign(
   return { ...payload, signature: b64url(sig) };
 }
 
+// Deterministic fake anchor so the admin-report path doesn't hit Solana.
+const fakeAnchor = {
+  cluster: "devnet",
+  rpcUrl: "http://localhost",
+  async anchorRoot(root: string) {
+    return {
+      signature: `SIG_${root.slice(0, 8)}`,
+      cluster: "devnet",
+      programId: "PROG",
+      recordPda: `PDA_${root.slice(0, 8)}`,
+      nonce: "1",
+      explorer: `https://explorer.solana.com/tx/SIG_${root.slice(0, 8)}?cluster=devnet`,
+    };
+  },
+} as unknown as Parameters<typeof buildApp>[0]["anchor"];
+
 function makeApp(overrides: Record<string, string> = {}) {
   process.env.NODE_ENV = "test";
   process.env.PINNING_PROVIDER = "noop";
+  delete process.env.USAGE_ADMIN_TOKEN;
   for (const [k, v] of Object.entries(overrides)) process.env[k] = v;
   const cfg = loadConfig();
   const usage = buildUsageService({ dbPath: ":memory:", maxSkewMs: cfg.USAGE_MAX_SKEW_MS, nonceRetentionMs: cfg.USAGE_NONCE_RETENTION_MS });
-  const built = buildApp({ cfg, logger: pino({ level: "silent" }), dispatcher: new MemoryDispatcher(), usage });
+  const built = buildApp({ cfg, logger: pino({ level: "silent" }), dispatcher: new MemoryDispatcher(), usage, anchor: fakeAnchor });
   return { app: built.app, usage: usage as UsageService };
 }
 
@@ -289,6 +306,50 @@ describe("usage: reports + rate limiting", () => {
       codes.push(res.status);
     }
     expect(codes.filter((c) => c === 429).length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("usage: admin report endpoint", () => {
+  it("is disabled (404) when no admin token is configured", async () => {
+    const ctx = makeApp();
+    const res = await request(ctx.app).post("/v1/usage/report/run").send({ current: true });
+    expect(res.status).toBe(404);
+  });
+
+  it("rejects a wrong/absent bearer token (401)", async () => {
+    const ctx = makeApp({ USAGE_ADMIN_TOKEN: "s3cret-token" });
+    expect((await request(ctx.app).post("/v1/usage/report/run").send({ current: true })).status).toBe(401);
+    const res = await request(ctx.app)
+      .post("/v1/usage/report/run")
+      .set("authorization", "Bearer wrong")
+      .send({ current: true });
+    expect(res.status).toBe(401);
+  });
+
+  it("finalises + anchors a week with the correct token", async () => {
+    const ctx = makeApp({ USAGE_ADMIN_TOKEN: "s3cret-token" });
+    const id = await makeIdentity();
+    await request(ctx.app).post("/v1/usage").send(await sign(id, { counters: { record_created: 5, evidence_added: 9 }, seq: 1 }));
+
+    const res = await request(ctx.app)
+      .post("/v1/usage/report/run")
+      .set("authorization", "Bearer s3cret-token")
+      .send({ current: true });
+    expect(res.status).toBe(200);
+    expect(res.body.anchored).toBe(true);
+    expect(res.body.chainTx).toMatch(/^SIG_/);
+    expect(res.body.metrics.records_created).toBe(5);
+
+    const week = isoWeek(Date.now());
+    expect((await request(ctx.app).get("/v1/usage/reports")).body.weeks).toContain(week);
+    const rep = await request(ctx.app).get(`/v1/usage/reports/${week}`);
+    expect(rep.body.commitment.tx).toMatch(/^SIG_/);
+    // Re-running the same week bumps the version (a versioned correction).
+    const again = await request(ctx.app)
+      .post("/v1/usage/report/run")
+      .set("authorization", "Bearer s3cret-token")
+      .send({ current: true });
+    expect(again.body.version).toBe(2);
   });
 });
 

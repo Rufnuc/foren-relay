@@ -1,0 +1,59 @@
+name: Weekly usage report
+
+# Finalises the previous week's anonymous usage report and anchors its hash
+# on-chain, by calling the relay's protected endpoint. The relay does the work
+# (it already holds the Solana key + the database), so NO secrets other than a
+# call token ever reach GitHub.
+#
+# Setup (one-time):
+#   1. On the relay (Render dashboard) set env  USAGE_ADMIN_TOKEN  to a long
+#      random value (e.g. `openssl rand -hex 32`).
+#   2. In this GitHub repo → Settings → Secrets and variables → Actions:
+#        - Secret  USAGE_ADMIN_TOKEN   = the same value
+#        - Variable RELAY_BASE_URL     = https://foren-relay.onrender.com  (optional; this is the default)
+#   3. Trigger it manually once (Actions tab → this workflow → Run workflow) to test.
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # Mondays 03:00 UTC — finalises the week that just ended
+  workflow_dispatch:
+    inputs:
+      week:
+        description: 'ISO week to finalise (e.g. 2026-W39). Blank = previous complete week.'
+        required: false
+        default: ""
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the relay's report endpoint
+        env:
+          RELAY_BASE_URL: ${{ vars.RELAY_BASE_URL || 'https://foren-relay.onrender.com' }}
+          USAGE_ADMIN_TOKEN: ${{ secrets.USAGE_ADMIN_TOKEN }}
+          WEEK: ${{ github.event.inputs.week }}
+        run: |
+          set -euo pipefail
+          if [ -z "${USAGE_ADMIN_TOKEN:-}" ]; then
+            echo "::error::USAGE_ADMIN_TOKEN secret is not set in this repo."
+            exit 1
+          fi
+          if [ -n "${WEEK:-}" ]; then BODY="{\"week\":\"${WEEK}\"}"; else BODY="{}"; fi
+          echo "POST ${RELAY_BASE_URL}/v1/usage/report/run  body=${BODY}"
+          # Render free tier can cold-start; allow a generous timeout + one retry.
+          code=$(curl -sS -m 120 --retry 2 --retry-delay 15 -o resp.json -w "%{http_code}" \
+            -X POST "${RELAY_BASE_URL}/v1/usage/report/run" \
+            -H "Authorization: Bearer ${USAGE_ADMIN_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "${BODY}") || { echo "::error::request failed"; cat resp.json || true; exit 1; }
+          echo "HTTP ${code}"
+          cat resp.json
+          echo
+          # 200 = anchored, 202 = stored without on-chain commitment (re-runs next week).
+          if [ "${code}" != "200" ] && [ "${code}" != "202" ]; then
+            echo "::error::report endpoint returned ${code}"
+            exit 1
+          fi
+          if [ "${code}" = "202" ]; then
+            echo "::warning::report stored but NOT anchored on-chain (see 'error' above); it will retry next run."
+          fi

@@ -11,7 +11,7 @@
  */
 import { loadConfig } from "../src/config";
 import { buildLogger } from "../src/util/logger";
-import { buildUsageService } from "../src/services/usage";
+import { buildUsageService, finalizeWeeklyReport } from "../src/services/usage";
 import { buildAnchorService } from "../src/services/anchor";
 import { isoWeek } from "../src/services/usage/canonical";
 
@@ -30,59 +30,19 @@ async function main() {
     },
     logger,
   );
+  const anchor = buildAnchorService(cfg, logger);
 
-  const existing = await usage.store.getReport(week);
-  const version = existing ? existing.version + 1 : 1;
-  const built = await usage.buildReportForWeek(week, version);
+  // Same code path as the admin endpoint: build → anchor → store (versioned).
+  const result = await finalizeWeeklyReport(usage, anchor, week, logger);
+  const m = result.metrics;
 
-  logger.info({ week, version, sha256: built.sha256, metrics: built.report.metrics }, "built weekly report");
-
-  // Anchor ONLY the SHA-256 (a 32-byte hash). No IDs, keys, or events on-chain.
-  let chain: {
-    tx: string | null;
-    cluster: string | null;
-    explorer: string | null;
-    programId: string | null;
-    recordPda: string | null;
-  } = { tx: null, cluster: null, explorer: null, programId: null, recordPda: null };
-  try {
-    const anchor = buildAnchorService(cfg, logger);
-    const res = await anchor.anchorRoot(built.sha256);
-    chain = {
-      tx: res.signature,
-      cluster: res.cluster,
-      explorer: res.explorer,
-      programId: res.programId,
-      recordPda: res.recordPda,
-    };
-    logger.info({ tx: res.signature, recordPda: res.recordPda }, "anchored report hash on-chain");
-  } catch (err) {
-    logger.error({ err }, "on-chain anchoring failed — storing report WITHOUT commitment (re-run to anchor)");
-  }
-
-  await usage.store.putReport({
-    week,
-    version,
-    json: built.json,
-    sha256: built.sha256,
-    chainTx: chain.tx,
-    chainCluster: chain.cluster,
-    chainExplorer: chain.explorer,
-    chainProgram: chain.programId,
-    chainRecordPda: chain.recordPda,
-    createdAt: Date.now(),
-  });
-
-  // Human-readable summary to stdout.
-  const m = built.report.metrics;
-  const period = built.report.period;
   process.stdout.write(
     [
       "",
       "FOREN WEEKLY USAGE",
       "",
       `Period:`,
-      `${period.start} – ${period.end}  (${week}, report v${version})`,
+      `${week}, report v${result.version}`,
       "",
       `Anonymous identities with qualifying activity:  ${m.anonymous_identities}`,
       `New anonymous identities:                        ${m.new_anonymous_identities}`,
@@ -93,8 +53,8 @@ async function main() {
       `Verification operations:                         ${m.verification_operations}`,
       `Exports:                                         ${m.exports}`,
       "",
-      `SHA-256:  ${built.sha256}`,
-      `Chain tx: ${chain.tx ?? "(not anchored)"}`,
+      `SHA-256:  ${result.sha256}`,
+      `Chain tx: ${result.chainTx ?? "(not anchored)"}`,
       "",
     ].join("\n"),
   );
