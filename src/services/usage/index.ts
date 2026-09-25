@@ -5,10 +5,35 @@
 import { createHash } from "node:crypto";
 import type { Logger } from "pino";
 import type { AnchorService } from "../anchor";
-import { buildLocalUsageStore, type UsageStore, type WeekAggregate } from "./store";
+import {
+  buildLocalUsageStore,
+  type UsageStore,
+  type WeekAggregate,
+} from "./store";
 import { buildLibsqlUsageStore } from "./store_libsql";
 import { verifySubmission, type VerifyResult } from "./verify";
+import { verifySignedEnvelope, redeemerCommit } from "./signed";
+import {
+  activityScore as computeActivityScore,
+  describe,
+  kFactor,
+  percentileRank,
+  retentionCurve,
+  reuseRate,
+  type Distribution,
+} from "./analytics";
 import { canonicalize, isoWeek, isoWeekRange } from "./canonical";
+
+/** Whole weeks between two ISO week labels (>= 0), by their Monday start times. */
+function weeksBetween(fromWeek: string, toWeek: string): number {
+  try {
+    const a = isoWeekRange(fromWeek).startMs;
+    const b = isoWeekRange(toWeek).startMs;
+    return Math.max(0, Math.floor((b - a) / (7 * 86400000)));
+  } catch {
+    return 0;
+  }
+}
 
 export interface UsageServiceConfig {
   dbPath: string;
@@ -48,7 +73,10 @@ function ymdUTC(ms: number): string {
   return new Date(ms).toISOString().slice(0, 10);
 }
 
-export function buildWeeklyReport(agg: WeekAggregate, version = 1): BuiltReport {
+export function buildWeeklyReport(
+  agg: WeekAggregate,
+  version = 1,
+): BuiltReport {
   const range = isoWeekRange(agg.week);
   const report: WeeklyReport = {
     v: 1,
@@ -118,7 +146,10 @@ export async function finalizeWeeklyReport(
     chainRecordPda = res.recordPda;
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
-    logger?.error({ err, week }, "usage: anchoring failed — storing report without commitment");
+    logger?.error(
+      { err, week },
+      "usage: anchoring failed — storing report without commitment",
+    );
   }
 
   await usage.store.putReport({
@@ -134,18 +165,101 @@ export async function finalizeWeeklyReport(
     createdAt: now,
   });
 
-  return { week, version, sha256: built.sha256, metrics: built.report.metrics, anchored, chainTx, chainExplorer, error };
+  return {
+    week,
+    version,
+    sha256: built.sha256,
+    metrics: built.report.metrics,
+    anchored,
+    chainTx,
+    chainExplorer,
+    error,
+  };
 }
+
+/** Public referral stats (no redeemer identities — safe to hand to the creator). */
+export interface ReferralPublic {
+  refId: string;
+  redemptions: number;
+  distinctRedeemers: number;
+  reused: boolean; // more than one distinct person used the link
+  firstRedeemedAt: number | null;
+  lastRedeemedAt: number | null;
+}
+
+export interface ActivityScoreResult {
+  score: number; // 0..100
+  percentile: number; // 0..1 — share of identities at or below this activity
+  activeWeeks: number;
+  weeksSinceActive: number;
+  totalActions: number;
+  population: number;
+}
+
+export interface AnalyticsReport {
+  generatedAt: number;
+  week: string;
+  population: number;
+  activity: Distribution;
+  scores: Distribution;
+  referrals: {
+    links: number;
+    redemptions: number;
+    distinctRedeemers: number;
+    kFactor: number;
+    reuseRate: number;
+  };
+  retention: { week: string; active: number; retained: number; rate: number }[];
+}
+
+export type ServiceResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; code: string; message: string };
 
 export interface UsageService {
   readonly store: UsageStore;
-  submit(body: unknown, now?: number): Promise<{ status: string; code?: string; message?: string }>;
+  submit(
+    body: unknown,
+    now?: number,
+  ): Promise<{ status: string; code?: string; message?: string }>;
+  redeemReferral(
+    body: unknown,
+    now?: number,
+  ): Promise<ServiceResult<{ status: string; referral: ReferralPublic }>>;
+  referralStats(refId: string): Promise<ReferralPublic | undefined>;
+  activityScore(
+    body: unknown,
+    now?: number,
+  ): Promise<ServiceResult<ActivityScoreResult>>;
+  buildAnalytics(now?: number): Promise<AnalyticsReport>;
   buildReportForWeek(week: string, version?: number): Promise<BuiltReport>;
   currentWeek(now?: number): string;
   close(): Promise<void>;
 }
 
-export function buildUsageService(cfg: UsageServiceConfig, logger?: Logger): UsageService {
+const REF_ID = /^[A-Za-z0-9_-]{16,128}$/;
+
+function toPublic(row: {
+  refId: string;
+  redemptions: number;
+  distinctRedeemers: number;
+  firstRedeemedAt: number | null;
+  lastRedeemedAt: number | null;
+}): ReferralPublic {
+  return {
+    refId: row.refId,
+    redemptions: row.redemptions,
+    distinctRedeemers: row.distinctRedeemers,
+    reused: row.distinctRedeemers > 1,
+    firstRedeemedAt: row.firstRedeemedAt,
+    lastRedeemedAt: row.lastRedeemedAt,
+  };
+}
+
+export function buildUsageService(
+  cfg: UsageServiceConfig,
+  logger?: Logger,
+): UsageService {
   const store: UsageStore = cfg.libsqlUrl
     ? buildLibsqlUsageStore(cfg.libsqlUrl, cfg.libsqlAuthToken)
     : buildLocalUsageStore(cfg.dbPath);
@@ -155,8 +269,12 @@ export function buildUsageService(cfg: UsageServiceConfig, logger?: Logger): Usa
     store,
 
     async submit(body: unknown, now = Date.now()) {
-      const res: VerifyResult = await verifySubmission(body, { now, maxSkewMs: cfg.maxSkewMs });
-      if (!res.ok) return { status: "rejected", code: res.code, message: res.message };
+      const res: VerifyResult = await verifySubmission(body, {
+        now,
+        maxSkewMs: cfg.maxSkewMs,
+      });
+      if (!res.ok)
+        return { status: "rejected", code: res.code, message: res.message };
 
       const week = isoWeek(now);
       const applied = await store.apply({
@@ -177,6 +295,129 @@ export function buildUsageService(cfg: UsageServiceConfig, logger?: Logger): Usa
         logger?.warn({ err }, "usage: nonce prune failed");
       }
       return { status: applied.status };
+    },
+
+    async redeemReferral(body: unknown, now = Date.now()) {
+      const res = await verifySignedEnvelope<{ refId: string }>(
+        body,
+        ["refId"],
+        {
+          now,
+          maxSkewMs: cfg.maxSkewMs,
+        },
+      );
+      if (!res.ok)
+        return { ok: false as const, code: res.code, message: res.message };
+      const refId = res.fields.refId;
+      if (!REF_ID.test(refId)) {
+        return {
+          ok: false as const,
+          code: "bad_ref",
+          message: "refId is malformed",
+        };
+      }
+      // The relay computes the dedupe commitment itself from the (verified)
+      // anonId — the client never sends who redeemed, and the creator's identity
+      // is never part of this at all.
+      const commit = redeemerCommit(refId, res.anonId);
+      const out = await store.redeemReferral(refId, commit, now);
+      try {
+        await store.pruneNonces(now - cfg.nonceRetentionMs);
+      } catch (err) {
+        logger?.warn({ err }, "referral: nonce prune failed");
+      }
+      return {
+        ok: true as const,
+        value: { status: out.status, referral: toPublic(out.row) },
+      };
+    },
+
+    async referralStats(refId: string): Promise<ReferralPublic | undefined> {
+      if (!REF_ID.test(refId)) return undefined;
+      const row = await store.getReferral(refId);
+      return row ? toPublic(row) : undefined;
+    },
+
+    async activityScore(body: unknown, now = Date.now()) {
+      const res = await verifySignedEnvelope<Record<string, never>>(body, [], {
+        now,
+        maxSkewMs: cfg.maxSkewMs,
+      });
+      if (!res.ok)
+        return { ok: false as const, code: res.code, message: res.message };
+      const act = await store.getActivity(res.anonId);
+      const all = await store.listActivity();
+      const population = all.length;
+      if (!act) {
+        // Known key, but no usage recorded yet (tracking may be off): score 0.
+        return {
+          ok: true as const,
+          value: {
+            score: 0,
+            percentile: 0,
+            activeWeeks: 0,
+            weeksSinceActive: 0,
+            totalActions: 0,
+            population,
+          },
+        };
+      }
+      const curWeek = isoWeek(now);
+      const weeksSince = act.lastActiveWeek
+        ? weeksBetween(act.lastActiveWeek, curWeek)
+        : 0;
+      const score = computeActivityScore({
+        volume: act.activityTotal,
+        activeWeeks: act.activeWeeks,
+        weeksSince,
+      });
+      const percentile = percentileRank(
+        all.map((a) => a.activityTotal),
+        act.activityTotal,
+      );
+      return {
+        ok: true as const,
+        value: {
+          score,
+          percentile: Math.round(percentile * 10000) / 10000,
+          activeWeeks: act.activeWeeks,
+          weeksSinceActive: weeksSince,
+          totalActions: act.activityTotal,
+          population,
+        },
+      };
+    },
+
+    async buildAnalytics(now = Date.now()): Promise<AnalyticsReport> {
+      const acts = await store.listActivity();
+      const curWeek = isoWeek(now);
+      const totals = acts.map((a) => a.activityTotal);
+      const scores = acts.map((a) =>
+        computeActivityScore({
+          volume: a.activityTotal,
+          activeWeeks: a.activeWeeks,
+          weeksSince: a.lastActiveWeek
+            ? weeksBetween(a.lastActiveWeek, curWeek)
+            : 0,
+        }),
+      );
+      const rt = await store.referralTotals();
+      const retention = retentionCurve(await store.retentionPoints());
+      return {
+        generatedAt: now,
+        week: curWeek,
+        population: acts.length,
+        activity: describe(totals),
+        scores: describe(scores),
+        referrals: {
+          links: rt.links,
+          redemptions: rt.redemptions,
+          distinctRedeemers: rt.distinctRedeemers,
+          kFactor: kFactor(rt.distinctRedeemers, acts.length),
+          reuseRate: reuseRate(rt.redemptions, rt.links),
+        },
+        retention,
+      };
     },
 
     async buildReportForWeek(week: string, version = 1): Promise<BuiltReport> {

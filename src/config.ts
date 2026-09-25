@@ -25,7 +25,11 @@ const Schema = z.object({
   CORS_ORIGINS: z.string().default(""),
 
   // Maximum size of an encrypted blob accepted by /v1/pin (bytes).
-  MAX_BLOB_BYTES: z.coerce.number().int().positive().default(50 * 1024 * 1024),
+  MAX_BLOB_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(50 * 1024 * 1024),
 
   // IPFS pinning
   PINNING_PROVIDER: PinningProvider.default("local"),
@@ -46,7 +50,9 @@ const Schema = z.object({
   RATE_LIMIT_ANCHOR_PER_MIN: z.coerce.number().int().positive().default(10),
 
   // Solana anchoring
-  SOLANA_CLUSTER: z.enum(["localnet", "devnet", "mainnet-beta"]).default("devnet"),
+  SOLANA_CLUSTER: z
+    .enum(["localnet", "devnet", "mainnet-beta"])
+    .default("devnet"),
   // Optional explicit RPC override; otherwise derived from the cluster.
   SOLANA_RPC_URL: z.string().url().optional(),
   // Relay signing key as a JSON array of 64 bytes (solana-keygen format). If
@@ -71,7 +77,10 @@ const Schema = z.object({
   STRIPE_WEBHOOK_SECRET: z.string().optional(),
   // Neutral text on the card statement (survivor safety — never reveals "Foren").
   PAYMENT_STATEMENT_DESCRIPTOR: z.string().max(22).default("SUPPORT"),
-  PAYMENT_SUCCESS_URL: z.string().url().default("https://foren.app/pay/success"),
+  PAYMENT_SUCCESS_URL: z
+    .string()
+    .url()
+    .default("https://foren.app/pay/success"),
   PAYMENT_CANCEL_URL: z.string().url().default("https://foren.app/pay/cancel"),
   // Solana Pay (crypto). Recipient pubkey + optional SPL mint for USDC.
   SOLANA_PAY_RECIPIENT: z.string().optional(),
@@ -91,12 +100,26 @@ const Schema = z.object({
   USAGE_LIBSQL_URL: z.string().default(""),
   USAGE_LIBSQL_AUTH_TOKEN: z.string().default(""),
   // How far a submission's issuedAt may be from server time (replay freshness).
-  USAGE_MAX_SKEW_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
+  USAGE_MAX_SKEW_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(10 * 60 * 1000),
   // How long replay nonces are retained (>= max skew). Older nonces are pruned.
-  USAGE_NONCE_RETENTION_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
+  USAGE_NONCE_RETENTION_MS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(24 * 60 * 60 * 1000),
   RATE_LIMIT_USAGE_PER_MIN: z.coerce.number().int().positive().default(30),
+  // "Help a friend" referral redemptions + activity-score lookups (per IP).
+  RATE_LIMIT_REFERRAL_PER_MIN: z.coerce.number().int().positive().default(30),
   // Hosted (zero-knowledge) vault backup: max encrypted-blob size + rate limit.
-  VAULT_BACKUP_MAX_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  VAULT_BACKUP_MAX_BYTES: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(25 * 1024 * 1024),
   RATE_LIMIT_BACKUP_PER_MIN: z.coerce.number().int().positive().default(20),
   // Bearer token that authorises POST /v1/usage/report/run (weekly report
   // finalisation + on-chain anchoring). Unset = the endpoint is disabled. Set a
@@ -126,6 +149,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
 export function corsOrigins(cfg: Config): string[] {
   return cfg.CORS_ORIGINS
-    ? cfg.CORS_ORIGINS.split(",").map((s) => s.trim()).filter(Boolean)
+    ? cfg.CORS_ORIGINS.split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
     : [];
 }
