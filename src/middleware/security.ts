@@ -37,7 +37,9 @@ export function securityMiddleware(cfg: Config): RequestHandler[] {
         }
         cb(null, allowed.includes(origin));
       },
-      methods: ["GET", "POST", "OPTIONS"],
+      // PUT/DELETE are used by the hosted vault-backup endpoints.
+      methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+      allowedHeaders: ["Content-Type", "x-write-secret"],
       maxAge: 600,
     }),
   ];
