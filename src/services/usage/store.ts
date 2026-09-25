@@ -64,6 +64,21 @@ export interface ReportRow {
   createdAt: number;
 }
 
+/**
+ * A hosted (zero-knowledge) vault backup. The relay stores only an opaque
+ * locator, a write-authorisation commitment (a hash — never the secret), and the
+ * IPFS CID of the E2E-encrypted blob. It cannot read the blob or link it to a
+ * person.
+ */
+export interface BackupRow {
+  locator: string;
+  writeCommit: string; // SHA-256(writeSecret) — proves the code-holder authorised writes
+  cid: string;
+  size: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 // Async so the interface fits both the local synchronous node:sqlite backend
 // and the remote (async) libSQL/Turso backend.
 export interface UsageStore {
@@ -73,6 +88,9 @@ export interface UsageStore {
   getReport(week: string): Promise<ReportRow | undefined>;
   putReport(row: ReportRow): Promise<void>;
   pruneNonces(olderThanMs: number): Promise<number>;
+  getBackup(locator: string): Promise<BackupRow | undefined>;
+  putBackup(row: BackupRow): Promise<void>;
+  deleteBackup(locator: string): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -113,6 +131,14 @@ export const USAGE_SCHEMA_STATEMENTS = [
   chain_record_pda TEXT,
   created_at INTEGER NOT NULL
 )`,
+  `CREATE TABLE IF NOT EXISTS vault_backup (
+  locator TEXT PRIMARY KEY,
+  write_commit TEXT NOT NULL,
+  cid TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)`,
 ];
 
 const SCHEMA = `
@@ -151,6 +177,14 @@ CREATE TABLE IF NOT EXISTS report (
   chain_program TEXT,
   chain_record_pda TEXT,
   created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS vault_backup (
+  locator TEXT PRIMARY KEY,
+  write_commit TEXT NOT NULL,
+  cid TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 `;
 
@@ -292,6 +326,34 @@ export function buildLocalUsageStore(path: string): UsageStore {
 
     async pruneNonces(olderThanMs: number): Promise<number> {
       return Number(db.prepare("DELETE FROM nonce WHERE seen_at < ?").run(olderThanMs).changes);
+    },
+
+    async getBackup(locator: string): Promise<BackupRow | undefined> {
+      const r = db.prepare("SELECT * FROM vault_backup WHERE locator = ?").get(locator) as
+        | Record<string, unknown>
+        | undefined;
+      if (!r) return undefined;
+      return {
+        locator: r.locator as string,
+        writeCommit: r.write_commit as string,
+        cid: r.cid as string,
+        size: r.size as number,
+        createdAt: r.created_at as number,
+        updatedAt: r.updated_at as number,
+      };
+    },
+
+    async putBackup(row: BackupRow): Promise<void> {
+      db.prepare(
+        `INSERT INTO vault_backup(locator, write_commit, cid, size, created_at, updated_at)
+         VALUES (?,?,?,?,?,?)
+         ON CONFLICT(locator) DO UPDATE SET
+           write_commit=excluded.write_commit, cid=excluded.cid, size=excluded.size, updated_at=excluded.updated_at`,
+      ).run(row.locator, row.writeCommit, row.cid, row.size, row.createdAt, row.updatedAt);
+    },
+
+    async deleteBackup(locator: string): Promise<void> {
+      db.prepare("DELETE FROM vault_backup WHERE locator = ?").run(locator);
     },
 
     async close(): Promise<void> {

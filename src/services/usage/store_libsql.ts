@@ -10,6 +10,7 @@ import {
   USAGE_SCHEMA_STATEMENTS,
   type ApplyInput,
   type ApplyResult,
+  type BackupRow,
   type ReportRow,
   type UsageStore,
   type WeekAggregate,
@@ -155,6 +156,37 @@ export function buildLibsqlUsageStore(url: string, authToken?: string): UsageSto
       await ensure();
       const res = await client.execute({ sql: "DELETE FROM nonce WHERE seen_at < ?", args: [olderThanMs] });
       return Number(res.rowsAffected ?? 0);
+    },
+
+    async getBackup(locator: string): Promise<BackupRow | undefined> {
+      await ensure();
+      const res = await client.execute({ sql: "SELECT * FROM vault_backup WHERE locator = ?", args: [locator] });
+      const r = res.rows[0] as Record<string, unknown> | undefined;
+      if (!r) return undefined;
+      return {
+        locator: String(r.locator),
+        writeCommit: String(r.write_commit),
+        cid: String(r.cid),
+        size: num(r.size),
+        createdAt: num(r.created_at),
+        updatedAt: num(r.updated_at),
+      };
+    },
+
+    async putBackup(row: BackupRow): Promise<void> {
+      await ensure();
+      await client.execute({
+        sql: `INSERT INTO vault_backup(locator, write_commit, cid, size, created_at, updated_at)
+              VALUES (?,?,?,?,?,?)
+              ON CONFLICT(locator) DO UPDATE SET
+                write_commit=excluded.write_commit, cid=excluded.cid, size=excluded.size, updated_at=excluded.updated_at`,
+        args: [row.locator, row.writeCommit, row.cid, row.size, row.createdAt, row.updatedAt],
+      });
+    },
+
+    async deleteBackup(locator: string): Promise<void> {
+      await ensure();
+      await client.execute({ sql: "DELETE FROM vault_backup WHERE locator = ?", args: [locator] });
     },
 
     async close(): Promise<void> {

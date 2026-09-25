@@ -95,6 +95,9 @@ const Schema = z.object({
   // How long replay nonces are retained (>= max skew). Older nonces are pruned.
   USAGE_NONCE_RETENTION_MS: z.coerce.number().int().positive().default(24 * 60 * 60 * 1000),
   RATE_LIMIT_USAGE_PER_MIN: z.coerce.number().int().positive().default(30),
+  // Hosted (zero-knowledge) vault backup: max encrypted-blob size + rate limit.
+  VAULT_BACKUP_MAX_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
+  RATE_LIMIT_BACKUP_PER_MIN: z.coerce.number().int().positive().default(20),
   // Bearer token that authorises POST /v1/usage/report/run (weekly report
   // finalisation + on-chain anchoring). Unset = the endpoint is disabled. Set a
   // long random value in the dashboard and give the same value to the scheduler

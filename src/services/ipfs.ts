@@ -20,6 +20,14 @@ export interface PinningProvider {
   pin(blob: Buffer, contentType?: string): Promise<PinResult>;
   /** Best-effort detach. Some providers can't actually delete from the DHT. */
   unpin(cid: string): Promise<void>;
+  /** Fetch a pinned blob's bytes back by CID (used to serve hosted backups). */
+  cat(cid: string): Promise<Buffer>;
+}
+
+async function fetchGateway(url: string): Promise<Buffer> {
+  const res = await fetch(url, { redirect: "follow" });
+  if (!res.ok) throw internal(`gateway fetch failed: ${res.status} ${res.statusText}`);
+  return Buffer.from(await res.arrayBuffer());
 }
 
 class NoopProvider implements PinningProvider {
@@ -36,6 +44,9 @@ class NoopProvider implements PinningProvider {
   }
   async unpin(_cid: string): Promise<void> {
     /* no-op */
+  }
+  async cat(_cid: string): Promise<Buffer> {
+    throw internal("noop pinning cannot retrieve blobs — configure a real provider (pinata)");
   }
 }
 
@@ -74,6 +85,13 @@ class LocalKuboProvider implements PinningProvider {
       throw internal(`unpin failed for ${cid}: ${(err as Error).message}`);
     }
   }
+
+  async cat(cid: string): Promise<Buffer> {
+    const ipfs = await this.client();
+    const chunks: Buffer[] = [];
+    for await (const c of ipfs.cat(cid)) chunks.push(Buffer.from(c));
+    return Buffer.concat(chunks);
+  }
 }
 
 class Web3StorageProvider implements PinningProvider {
@@ -99,6 +117,10 @@ class Web3StorageProvider implements PinningProvider {
   async unpin(_cid: string): Promise<void> {
     // web3.storage retains content as part of Filecoin commitments; true
     // unpin requires per-account console action. This is documented.
+  }
+
+  async cat(cid: string): Promise<Buffer> {
+    return fetchGateway(`https://w3s.link/ipfs/${cid}`);
   }
 }
 
@@ -131,6 +153,10 @@ class PinataProvider implements PinningProvider {
     if (!res.ok) {
       throw internal(`pinata unpin failed: ${res.status} ${res.statusText}`);
     }
+  }
+
+  async cat(cid: string): Promise<Buffer> {
+    return fetchGateway(`https://gateway.pinata.cloud/ipfs/${cid}`);
   }
 }
 
