@@ -24,15 +24,41 @@ export function usageRouter(deps: {
 }) {
   const r = Router();
 
-  // Bearer-token check for the admin report endpoint (constant-time compare).
-  function adminAuthorized(req: import("express").Request): boolean {
-    const token = deps.cfg.USAGE_ADMIN_TOKEN;
-    if (!token) return false; // endpoint disabled when unset
-    const header = req.get("authorization") ?? "";
-    const presented = header.startsWith("Bearer ") ? header.slice(7) : "";
+  // Constant-time string compare that never throws on length mismatch.
+  function tokenEquals(presented: string, token: string): boolean {
+    if (!token) return false;
     const a = Buffer.from(presented);
     const b = Buffer.from(token);
     return a.length === b.length && timingSafeEqual(a, b);
+  }
+
+  function bearer(req: import("express").Request): string {
+    const header = req.get("authorization") ?? "";
+    return header.startsWith("Bearer ") ? header.slice(7) : "";
+  }
+
+  // Bearer-token check for the admin report endpoint (constant-time compare).
+  function adminAuthorized(req: import("express").Request): boolean {
+    if (!deps.cfg.USAGE_ADMIN_TOKEN) return false; // endpoint disabled when unset
+    return tokenEquals(bearer(req), deps.cfg.USAGE_ADMIN_TOKEN);
+  }
+
+  // Read-only metrics dashboard access. Enabled if it's public, or if either the
+  // dedicated read token or the admin token is configured. The presented token
+  // may come from `Authorization: Bearer` or the `?k=` query param (so a plain
+  // browser fetch from the static dashboard works without a custom header).
+  const metricsEnabled =
+    deps.cfg.METRICS_PUBLIC ||
+    !!deps.cfg.METRICS_TOKEN ||
+    !!deps.cfg.USAGE_ADMIN_TOKEN;
+  function metricsAuthorized(req: import("express").Request): boolean {
+    if (deps.cfg.METRICS_PUBLIC) return true;
+    const presented =
+      bearer(req) || (typeof req.query.k === "string" ? req.query.k : "");
+    return (
+      tokenEquals(presented, deps.cfg.METRICS_TOKEN) ||
+      tokenEquals(presented, deps.cfg.USAGE_ADMIN_TOKEN)
+    );
   }
 
   const submitLimiter = rateLimit({
@@ -47,12 +73,10 @@ export function usageRouter(deps: {
     try {
       const result = await deps.usage.submit(req.body);
       if (result.status === "rejected") {
-        return res
-          .status(400)
-          .json({
-            error: result.message ?? "rejected",
-            code: result.code ?? "bad_request",
-          });
+        return res.status(400).json({
+          error: result.message ?? "rejected",
+          code: result.code ?? "bad_request",
+        });
       }
       // applied | duplicate | nonce_reused — all are acknowledged 200 so the
       // client stops retrying (duplicates are the exactly-once success case).
@@ -113,6 +137,23 @@ export function usageRouter(deps: {
           .status(401)
           .json({ error: "unauthorized", code: "unauthorized" });
       }
+      return res.json(await deps.usage.buildAnalytics());
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Read-only metrics feed for the shareable dashboard (public/metrics.html).
+  // Same aggregate analytics as /analytics, but reachable with the read-only
+  // METRICS_TOKEN (or ?k=) so an investor link never carries the admin token.
+  r.get("/metrics", async (req, res, next) => {
+    try {
+      if (!metricsEnabled)
+        return res.status(404).json({ error: "not found", code: "not_found" });
+      if (!metricsAuthorized(req))
+        return res
+          .status(401)
+          .json({ error: "unauthorized", code: "unauthorized" });
       return res.json(await deps.usage.buildAnalytics());
     } catch (err) {
       next(err);

@@ -127,6 +127,17 @@ const Schema = z.object({
   // (GitHub Action). Report generation runs IN the relay, so the Solana key and
   // the database never leave it.
   USAGE_ADMIN_TOKEN: z.string().default(""),
+  // READ-ONLY token for the shareable metrics dashboard (GET /metrics and
+  // GET /v1/usage/metrics). Distinct from USAGE_ADMIN_TOKEN on purpose: it only
+  // reveals aggregate analytics and can NEVER finalise/anchor a report, so a
+  // link carrying it (e.g. sent to investors) is safe. Unset = the dashboard is
+  // disabled (unless the admin token is used). METRICS_PUBLIC=true instead makes
+  // the dashboard readable with no token at all.
+  METRICS_TOKEN: z.string().default(""),
+  METRICS_PUBLIC: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
 
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
