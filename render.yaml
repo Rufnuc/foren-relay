@@ -17,7 +17,9 @@ services:
       - key: SOLANA_CLUSTER
         value: devnet
       - key: PINNING_PROVIDER
-        value: noop
+        value: pinata # IPFS pinning for hosted vault backups. Needs PINATA_JWT
+        # (a Pinata key WITH pinFileToIPFS + unpin scopes), set in the dashboard.
+        # If PINATA_JWT is unset the relay safely falls back to noop (no crash).
       # Allowed request origins: the Capacitor mobile app (https://localhost,
       # capacitor://localhost) AND the web PWA — the custom domain plus the
       # onrender.com fallback (kept so nothing breaks during the DNS cutover).

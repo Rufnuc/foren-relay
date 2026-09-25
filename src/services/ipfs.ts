@@ -7,7 +7,7 @@
  * provider.
  */
 import type { Config } from "../config";
-import { internal, unsupported } from "../util/errors";
+import { internal } from "../util/errors";
 
 export interface PinResult {
   cid: string;
@@ -142,12 +142,18 @@ export function buildPinningProvider(cfg: Config): PinningProvider {
       return new LocalKuboProvider(cfg.IPFS_API_URL);
     case "web3storage":
       if (!cfg.WEB3_STORAGE_TOKEN) {
-        throw unsupported("WEB3_STORAGE_TOKEN required for web3storage provider");
+        // Missing config must NOT crash the whole relay — fall back to noop so
+        // the rest of the API stays up; pinning just doesn't persist.
+        // eslint-disable-next-line no-console
+        console.warn("PINNING_PROVIDER=web3storage but WEB3_STORAGE_TOKEN is unset — falling back to noop");
+        return new NoopProvider();
       }
       return new Web3StorageProvider(cfg.WEB3_STORAGE_TOKEN);
     case "pinata":
       if (!cfg.PINATA_JWT) {
-        throw unsupported("PINATA_JWT required for pinata provider");
+        // eslint-disable-next-line no-console
+        console.warn("PINNING_PROVIDER=pinata but PINATA_JWT is unset — falling back to noop");
+        return new NoopProvider();
       }
       return new PinataProvider(cfg.PINATA_JWT);
   }
