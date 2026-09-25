@@ -11,17 +11,18 @@ import { anchorRouter } from "./routes/anchor";
 import { zkRouter } from "./routes/zk";
 import { paymentsRouter } from "./routes/payments";
 import { usageRouter } from "./routes/usage";
+import { referralRouter, activityRouter } from "./routes/referral";
 import { vaultBackupRouter } from "./routes/vault-backup";
 import { healthRouter } from "./routes/health";
 import { buildUsageService, type UsageService } from "./services/usage";
 import { errorHandler } from "./util/errors";
-import {
-  buildPinningProvider,
-  type PinningProvider,
-} from "./services/ipfs";
+import { buildPinningProvider, type PinningProvider } from "./services/ipfs";
 import { buildDispatcher, type Dispatcher } from "./services/dispatch";
 import { buildAnchorService, type AnchorService } from "./services/anchor";
-import { buildBitcoinAnchorService, type BitcoinAnchorService } from "./services/bitcoin";
+import {
+  buildBitcoinAnchorService,
+  type BitcoinAnchorService,
+} from "./services/bitcoin";
 import { buildZkService, type ZkService } from "./services/zk";
 import { buildPayments, type Payments } from "./services/payments";
 
@@ -83,7 +84,9 @@ export function buildApp(deps: ServerDeps): {
       // Do not access-log usage submissions: it keeps client IPs out of the
       // application logs, so usage tracking can never become an IP analytics
       // system. (Health checks are also skipped.)
-      autoLogging: { ignore: (req) => req.url === "/livez" || req.url === "/v1/usage" },
+      autoLogging: {
+        ignore: (req) => req.url === "/livez" || req.url === "/v1/usage",
+      },
     }),
   );
 
@@ -92,14 +95,23 @@ export function buildApp(deps: ServerDeps): {
 
   // JSON parser for endpoints that take JSON. Note: /v1/pin reads raw bytes
   // and is mounted before `express.json()` would otherwise consume the body.
-  app.use("/v1/pin", express.raw({ type: "application/octet-stream", limit: deps.cfg.MAX_BLOB_BYTES }));
+  app.use(
+    "/v1/pin",
+    express.raw({
+      type: "application/octet-stream",
+      limit: deps.cfg.MAX_BLOB_BYTES,
+    }),
+  );
   // Hosted vault backup PUT bodies are raw encrypted bytes — parse before json.
   app.use(
     "/v1/vault-backup",
     express.raw({ type: () => true, limit: deps.cfg.VAULT_BACKUP_MAX_BYTES }),
   );
   // Stripe webhook needs the raw body for signature verification — mount before json.
-  app.use("/v1/pay/stripe/webhook", express.raw({ type: "application/json", limit: "1mb" }));
+  app.use(
+    "/v1/pay/stripe/webhook",
+    express.raw({ type: "application/json", limit: "1mb" }),
+  );
   app.use(express.json({ limit: "256kb" }));
 
   // Health
@@ -114,8 +126,15 @@ export function buildApp(deps: ServerDeps): {
   app.use("/v1/pay", paymentsRouter({ cfg: deps.cfg, payments }));
   if (usage) {
     app.use("/v1/usage", usageRouter({ cfg: deps.cfg, usage, anchor }));
+    // "Help a friend" referral analytics + per-user activity score. Share the
+    // usage store; all requests are anonymous (referrals) or self-signed (score).
+    app.use("/v1/referral", referralRouter({ cfg: deps.cfg, usage }));
+    app.use("/v1/activity", activityRouter({ cfg: deps.cfg, usage }));
     // Hosted zero-knowledge vault backup (uses the same store + the pinning provider).
-    app.use("/v1/vault-backup", vaultBackupRouter({ cfg: deps.cfg, usage, pinning }));
+    app.use(
+      "/v1/vault-backup",
+      vaultBackupRouter({ cfg: deps.cfg, usage, pinning }),
+    );
     // Standalone public verification page (neutral, aggregate-only, self-
     // contained HTML). Served at /usage. The global helmet CSP is `default-src
     // 'none'`, which blocks this page's inline script/style; override it with a
@@ -140,7 +159,9 @@ export function buildApp(deps: ServerDeps): {
   }
 
   // Catch-all 404 (after routes).
-  app.use((_req, res) => res.status(404).json({ error: "not found", code: "not_found" }));
+  app.use((_req, res) =>
+    res.status(404).json({ error: "not found", code: "not_found" }),
+  );
 
   // Global error handler — must be last.
   app.use(errorHandler);

@@ -18,7 +18,10 @@ import { COUNTER_KINDS, type Counters } from "./verify";
 // bundler cannot statically resolve it, so we load it via a runtime require()
 // (a plain require in the CommonJS build) and type its small surface locally.
 export interface SqliteStatement {
-  run: (...params: unknown[]) => { changes: number | bigint; lastInsertRowid: number | bigint };
+  run: (...params: unknown[]) => {
+    changes: number | bigint;
+    lastInsertRowid: number | bigint;
+  };
   get: (...params: unknown[]) => unknown;
   all: (...params: unknown[]) => unknown[];
 }
@@ -27,7 +30,9 @@ export interface SqliteDb {
   prepare: (sql: string) => SqliteStatement;
   close: () => void;
 }
-const { DatabaseSync } = require("node:sqlite") as { DatabaseSync: new (path: string) => SqliteDb };
+const { DatabaseSync } = require("node:sqlite") as {
+  DatabaseSync: new (path: string) => SqliteDb;
+};
 
 export interface ApplyInput {
   anonId: string;
@@ -79,6 +84,36 @@ export interface BackupRow {
   updatedAt: number;
 }
 
+/** Public redemption tally for one referral link (no redeemer identities). */
+export interface ReferralRow {
+  refId: string;
+  redemptions: number;
+  distinctRedeemers: number;
+  firstRedeemedAt: number | null;
+  lastRedeemedAt: number | null;
+  createdAt: number;
+}
+
+export type RedeemResult =
+  | { status: "recorded"; row: ReferralRow } // a new distinct redeemer
+  | { status: "duplicate"; row: ReferralRow }; // this redeemer already counted
+
+/** One anonymous identity's activity signals, for its own score + analytics. */
+export interface ActivityRow {
+  anonId: string;
+  activityTotal: number;
+  activeWeeks: number;
+  lastActiveWeek: string | null;
+  firstSeenWeek: string;
+}
+
+/** Aggregate referral totals across all links, for K-factor / reuse math. */
+export interface ReferralTotals {
+  links: number; // links that have ≥1 redemption
+  redemptions: number; // total redemptions
+  distinctRedeemers: number; // total distinct (refId, redeemer) pairs
+}
+
 // Async so the interface fits both the local synchronous node:sqlite backend
 // and the remote (async) libSQL/Turso backend.
 export interface UsageStore {
@@ -91,6 +126,19 @@ export interface UsageStore {
   getBackup(locator: string): Promise<BackupRow | undefined>;
   putBackup(row: BackupRow): Promise<void>;
   deleteBackup(locator: string): Promise<void>;
+  // Referral + activity analytics.
+  redeemReferral(
+    refId: string,
+    redeemerCommit: string,
+    now: number,
+  ): Promise<RedeemResult>;
+  getReferral(refId: string): Promise<ReferralRow | undefined>;
+  getActivity(anonId: string): Promise<ActivityRow | undefined>;
+  listActivity(): Promise<ActivityRow[]>;
+  referralTotals(): Promise<ReferralTotals>;
+  retentionPoints(): Promise<
+    { week: string; active: number; retained: number }[]
+  >;
   close(): Promise<void>;
 }
 
@@ -101,7 +149,29 @@ export const USAGE_SCHEMA_STATEMENTS = [
   first_seen_week TEXT NOT NULL,
   last_seq INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  activity_total INTEGER NOT NULL DEFAULT 0,
+  active_weeks INTEGER NOT NULL DEFAULT 0,
+  last_active_week TEXT
+)`,
+  // A shared referral LINK, keyed by an opaque, unguessable id the relay is
+  // given (SHA-256 of the secret code the creator holds). The relay never sees
+  // the code or the creator's identity — only redemption tallies.
+  `CREATE TABLE IF NOT EXISTS referral (
+  ref_id TEXT PRIMARY KEY,
+  redemptions INTEGER NOT NULL DEFAULT 0,
+  distinct_redeemers INTEGER NOT NULL DEFAULT 0,
+  first_redeemed_at INTEGER,
+  last_redeemed_at INTEGER,
+  created_at INTEGER NOT NULL
+)`,
+  // Per-recipient dedupe: only the commitment SHA-256("refId|anonId") is kept,
+  // so the relay can count DISTINCT redeemers without storing who they are.
+  `CREATE TABLE IF NOT EXISTS referral_redeemer (
+  ref_id TEXT NOT NULL,
+  redeemer_commit TEXT NOT NULL,
+  redeemed_at INTEGER NOT NULL,
+  PRIMARY KEY (ref_id, redeemer_commit)
 )`,
   `CREATE TABLE IF NOT EXISTS identity_week (
   week TEXT NOT NULL,
@@ -148,7 +218,24 @@ CREATE TABLE IF NOT EXISTS identity (
   first_seen_week TEXT NOT NULL,
   last_seq INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  activity_total INTEGER NOT NULL DEFAULT 0,
+  active_weeks INTEGER NOT NULL DEFAULT 0,
+  last_active_week TEXT
+);
+CREATE TABLE IF NOT EXISTS referral (
+  ref_id TEXT PRIMARY KEY,
+  redemptions INTEGER NOT NULL DEFAULT 0,
+  distinct_redeemers INTEGER NOT NULL DEFAULT 0,
+  first_redeemed_at INTEGER,
+  last_redeemed_at INTEGER,
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS referral_redeemer (
+  ref_id TEXT NOT NULL,
+  redeemer_commit TEXT NOT NULL,
+  redeemed_at INTEGER NOT NULL,
+  PRIMARY KEY (ref_id, redeemer_commit)
 );
 CREATE TABLE IF NOT EXISTS identity_week (
   week TEXT NOT NULL,
@@ -204,15 +291,38 @@ export function buildLocalUsageStore(path: string): UsageStore {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(SCHEMA);
+  // Migrate an identity table created before the activity columns existed. Each
+  // ADD COLUMN throws if the column is already present — harmless, so ignore.
+  for (const col of [
+    "activity_total INTEGER NOT NULL DEFAULT 0",
+    "active_weeks INTEGER NOT NULL DEFAULT 0",
+    "last_active_week TEXT",
+  ]) {
+    try {
+      db.exec(`ALTER TABLE identity ADD COLUMN ${col}`);
+    } catch {
+      /* column already exists */
+    }
+  }
 
   const selNonce = db.prepare("SELECT 1 AS one FROM nonce WHERE nonce = ?");
-  const insNonce = db.prepare("INSERT INTO nonce(nonce, seen_at) VALUES (?, ?)");
-  const selIdentity = db.prepare("SELECT anon_id, last_seq, first_seen_week FROM identity WHERE anon_id = ?");
-  const insIdentity = db.prepare(
-    "INSERT INTO identity(anon_id, pub_key, first_seen_week, last_seq, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+  const insNonce = db.prepare(
+    "INSERT INTO nonce(nonce, seen_at) VALUES (?, ?)",
   );
-  const updIdentity = db.prepare("UPDATE identity SET last_seq = ?, updated_at = ? WHERE anon_id = ?");
-  const insIdentityWeek = db.prepare("INSERT OR IGNORE INTO identity_week(week, anon_id) VALUES (?, ?)");
+  const selIdentity = db.prepare(
+    "SELECT anon_id, last_seq, first_seen_week FROM identity WHERE anon_id = ?",
+  );
+  const insIdentity = db.prepare(
+    `INSERT INTO identity(anon_id, pub_key, first_seen_week, last_seq, created_at, updated_at, activity_total, active_weeks, last_active_week)
+     VALUES (?,?,?,?,?,?,?,?,?)`,
+  );
+  const updIdentity = db.prepare(
+    `UPDATE identity SET last_seq = ?, updated_at = ?, activity_total = activity_total + ?,
+       active_weeks = active_weeks + ?, last_active_week = ? WHERE anon_id = ?`,
+  );
+  const insIdentityWeek = db.prepare(
+    "INSERT OR IGNORE INTO identity_week(week, anon_id) VALUES (?, ?)",
+  );
   const incCounter = db.prepare(
     "INSERT INTO weekly_counter(week, kind, count) VALUES (?,?,?) ON CONFLICT(week, kind) DO UPDATE SET count = count + excluded.count",
   );
@@ -237,12 +347,38 @@ export function buildLocalUsageStore(path: string): UsageStore {
       }
 
       insNonce.run(input.nonce, input.now);
+      // Per-identity activity: total actions this submission, and whether this is
+      // a new active week for the identity (drives the frequency signal).
+      const totalDelta = COUNTER_KINDS.reduce(
+        (a, k) => a + (input.counters[k] ?? 0),
+        0,
+      );
+      const weekIsNew =
+        Number(insIdentityWeek.run(input.week, input.anonId).changes) > 0
+          ? 1
+          : 0;
       if (!id) {
-        insIdentity.run(input.anonId, input.pubKey, input.week, input.seq, input.now, input.now);
+        insIdentity.run(
+          input.anonId,
+          input.pubKey,
+          input.week,
+          input.seq,
+          input.now,
+          input.now,
+          totalDelta,
+          1,
+          input.week,
+        );
       } else {
-        updIdentity.run(input.seq, input.now, input.anonId);
+        updIdentity.run(
+          input.seq,
+          input.now,
+          totalDelta,
+          weekIsNew,
+          input.week,
+          input.anonId,
+        );
       }
-      insIdentityWeek.run(input.week, input.anonId);
       for (const kind of COUNTER_KINDS) {
         const delta = input.counters[kind] ?? 0;
         if (delta > 0) incCounter.run(input.week, kind, delta);
@@ -255,9 +391,50 @@ export function buildLocalUsageStore(path: string): UsageStore {
     }
   }
 
-  const aggCounters = db.prepare("SELECT kind, count FROM weekly_counter WHERE week = ?");
-  const countIdentities = db.prepare("SELECT COUNT(*) AS n FROM identity_week WHERE week = ?");
-  const countNew = db.prepare("SELECT COUNT(*) AS n FROM identity WHERE first_seen_week = ?");
+  const aggCounters = db.prepare(
+    "SELECT kind, count FROM weekly_counter WHERE week = ?",
+  );
+  const countIdentities = db.prepare(
+    "SELECT COUNT(*) AS n FROM identity_week WHERE week = ?",
+  );
+  const countNew = db.prepare(
+    "SELECT COUNT(*) AS n FROM identity WHERE first_seen_week = ?",
+  );
+
+  const selReferral = db.prepare("SELECT * FROM referral WHERE ref_id = ?");
+  const insRedeemer = db.prepare(
+    "INSERT OR IGNORE INTO referral_redeemer(ref_id, redeemer_commit, redeemed_at) VALUES (?,?,?)",
+  );
+  // `redemptions` counts EVERY authenticated open (repeats included);
+  // `distinct_redeemers` only counts unique recipients (distinctInc = 1 for a
+  // new commit, 0 for a repeat). So "reuse" is visible two ways: many distinct
+  // people, and/or the same link opened repeatedly.
+  const upsertReferral = db.prepare(
+    `INSERT INTO referral(ref_id, redemptions, distinct_redeemers, first_redeemed_at, last_redeemed_at, created_at)
+     VALUES (?, 1, ?, ?, ?, ?)
+     ON CONFLICT(ref_id) DO UPDATE SET
+       redemptions = redemptions + 1,
+       distinct_redeemers = distinct_redeemers + ?,
+       first_redeemed_at = COALESCE(first_redeemed_at, excluded.first_redeemed_at),
+       last_redeemed_at = excluded.last_redeemed_at`,
+  );
+  const selActivity = db.prepare(
+    "SELECT anon_id, activity_total, active_weeks, last_active_week, first_seen_week FROM identity WHERE anon_id = ?",
+  );
+
+  function referralRow(
+    r: Record<string, unknown> | undefined,
+  ): ReferralRow | undefined {
+    if (!r) return undefined;
+    return {
+      refId: r.ref_id as string,
+      redemptions: r.redemptions as number,
+      distinctRedeemers: r.distinct_redeemers as number,
+      firstRedeemedAt: (r.first_redeemed_at as number) ?? null,
+      lastRedeemedAt: (r.last_redeemed_at as number) ?? null,
+      createdAt: r.created_at as number,
+    };
+  }
 
   return {
     async apply(input: ApplyInput): Promise<ApplyResult> {
@@ -267,8 +444,12 @@ export function buildLocalUsageStore(path: string): UsageStore {
     async aggregateWeek(week: string): Promise<WeekAggregate> {
       const counters = {} as Counters;
       for (const k of COUNTER_KINDS) counters[k] = 0;
-      for (const row of aggCounters.all(week) as { kind: string; count: number }[]) {
-        if ((COUNTER_KINDS as readonly string[]).includes(row.kind)) counters[row.kind as keyof Counters] = row.count;
+      for (const row of aggCounters.all(week) as {
+        kind: string;
+        count: number;
+      }[]) {
+        if ((COUNTER_KINDS as readonly string[]).includes(row.kind))
+          counters[row.kind as keyof Counters] = row.count;
       }
       const identities = (countIdentities.get(week) as { n: number }).n;
       const newIdentities = (countNew.get(week) as { n: number }).n;
@@ -282,11 +463,17 @@ export function buildLocalUsageStore(path: string): UsageStore {
     },
 
     async listReportWeeks(): Promise<string[]> {
-      return (db.prepare("SELECT week FROM report ORDER BY week ASC").all() as { week: string }[]).map((r) => r.week);
+      return (
+        db.prepare("SELECT week FROM report ORDER BY week ASC").all() as {
+          week: string;
+        }[]
+      ).map((r) => r.week);
     },
 
     async getReport(week: string): Promise<ReportRow | undefined> {
-      const r = db.prepare("SELECT * FROM report WHERE week = ?").get(week) as Record<string, unknown> | undefined;
+      const r = db.prepare("SELECT * FROM report WHERE week = ?").get(week) as
+        | Record<string, unknown>
+        | undefined;
       if (!r) return undefined;
       return {
         week: r.week as string,
@@ -325,13 +512,16 @@ export function buildLocalUsageStore(path: string): UsageStore {
     },
 
     async pruneNonces(olderThanMs: number): Promise<number> {
-      return Number(db.prepare("DELETE FROM nonce WHERE seen_at < ?").run(olderThanMs).changes);
+      return Number(
+        db.prepare("DELETE FROM nonce WHERE seen_at < ?").run(olderThanMs)
+          .changes,
+      );
     },
 
     async getBackup(locator: string): Promise<BackupRow | undefined> {
-      const r = db.prepare("SELECT * FROM vault_backup WHERE locator = ?").get(locator) as
-        | Record<string, unknown>
-        | undefined;
+      const r = db
+        .prepare("SELECT * FROM vault_backup WHERE locator = ?")
+        .get(locator) as Record<string, unknown> | undefined;
       if (!r) return undefined;
       return {
         locator: r.locator as string,
@@ -349,11 +539,123 @@ export function buildLocalUsageStore(path: string): UsageStore {
          VALUES (?,?,?,?,?,?)
          ON CONFLICT(locator) DO UPDATE SET
            write_commit=excluded.write_commit, cid=excluded.cid, size=excluded.size, updated_at=excluded.updated_at`,
-      ).run(row.locator, row.writeCommit, row.cid, row.size, row.createdAt, row.updatedAt);
+      ).run(
+        row.locator,
+        row.writeCommit,
+        row.cid,
+        row.size,
+        row.createdAt,
+        row.updatedAt,
+      );
     },
 
     async deleteBackup(locator: string): Promise<void> {
       db.prepare("DELETE FROM vault_backup WHERE locator = ?").run(locator);
+    },
+
+    async redeemReferral(
+      refId: string,
+      commit: string,
+      now: number,
+    ): Promise<RedeemResult> {
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const inserted =
+          Number(insRedeemer.run(refId, commit, now).changes) > 0;
+        const distinctInc = inserted ? 1 : 0;
+        // Args: (ref_id, distinct_redeemers[VALUES], first, last, created, distinctInc[UPDATE]).
+        upsertReferral.run(refId, distinctInc, now, now, now, distinctInc);
+        const row = referralRow(
+          selReferral.get(refId) as Record<string, unknown> | undefined,
+        )!;
+        db.exec("COMMIT");
+        return { status: inserted ? "recorded" : "duplicate", row };
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+    },
+
+    async getReferral(refId: string): Promise<ReferralRow | undefined> {
+      return referralRow(
+        selReferral.get(refId) as Record<string, unknown> | undefined,
+      );
+    },
+
+    async getActivity(anonId: string): Promise<ActivityRow | undefined> {
+      const r = selActivity.get(anonId) as Record<string, unknown> | undefined;
+      if (!r) return undefined;
+      return {
+        anonId: r.anon_id as string,
+        activityTotal: (r.activity_total as number) ?? 0,
+        activeWeeks: (r.active_weeks as number) ?? 0,
+        lastActiveWeek: (r.last_active_week as string) ?? null,
+        firstSeenWeek: r.first_seen_week as string,
+      };
+    },
+
+    async listActivity(): Promise<ActivityRow[]> {
+      const rows = db
+        .prepare(
+          "SELECT anon_id, activity_total, active_weeks, last_active_week, first_seen_week FROM identity",
+        )
+        .all() as Record<string, unknown>[];
+      return rows.map((r) => ({
+        anonId: r.anon_id as string,
+        activityTotal: (r.activity_total as number) ?? 0,
+        activeWeeks: (r.active_weeks as number) ?? 0,
+        lastActiveWeek: (r.last_active_week as string) ?? null,
+        firstSeenWeek: r.first_seen_week as string,
+      }));
+    },
+
+    async referralTotals(): Promise<ReferralTotals> {
+      const r = db
+        .prepare(
+          "SELECT COUNT(*) AS links, COALESCE(SUM(redemptions),0) AS redemptions, COALESCE(SUM(distinct_redeemers),0) AS distinct_redeemers FROM referral",
+        )
+        .get() as {
+        links: number;
+        redemptions: number;
+        distinct_redeemers: number;
+      };
+      return {
+        links: r.links,
+        redemptions: r.redemptions,
+        distinctRedeemers: r.distinct_redeemers,
+      };
+    },
+
+    async retentionPoints(): Promise<
+      { week: string; active: number; retained: number }[]
+    > {
+      const weeks = (
+        db
+          .prepare("SELECT DISTINCT week FROM identity_week ORDER BY week ASC")
+          .all() as {
+          week: string;
+        }[]
+      ).map((r) => r.week);
+      const activeIn = db.prepare(
+        "SELECT anon_id FROM identity_week WHERE week = ?",
+      );
+      const out: { week: string; active: number; retained: number }[] = [];
+      for (let i = 0; i < weeks.length - 1; i++) {
+        const cur = new Set(
+          (activeIn.all(weeks[i]) as { anon_id: string }[]).map(
+            (r) => r.anon_id,
+          ),
+        );
+        const nxt = new Set(
+          (activeIn.all(weeks[i + 1]) as { anon_id: string }[]).map(
+            (r) => r.anon_id,
+          ),
+        );
+        let retained = 0;
+        for (const a of cur) if (nxt.has(a)) retained++;
+        out.push({ week: weeks[i], active: cur.size, retained });
+      }
+      return out;
     },
 
     async close(): Promise<void> {

@@ -17,7 +17,11 @@ import { isoWeek } from "../services/usage/canonical";
  * signed by an anonymous key. See services/usage/verify.ts for the trust
  * boundary.
  */
-export function usageRouter(deps: { cfg: Config; usage: UsageService; anchor: AnchorService }) {
+export function usageRouter(deps: {
+  cfg: Config;
+  usage: UsageService;
+  anchor: AnchorService;
+}) {
   const r = Router();
 
   // Bearer-token check for the admin report endpoint (constant-time compare).
@@ -43,7 +47,12 @@ export function usageRouter(deps: { cfg: Config; usage: UsageService; anchor: An
     try {
       const result = await deps.usage.submit(req.body);
       if (result.status === "rejected") {
-        return res.status(400).json({ error: result.message ?? "rejected", code: result.code ?? "bad_request" });
+        return res
+          .status(400)
+          .json({
+            error: result.message ?? "rejected",
+            code: result.code ?? "bad_request",
+          });
       }
       // applied | duplicate | nonce_reused — all are acknowledged 200 so the
       // client stops retrying (duplicates are the exactly-once success case).
@@ -65,7 +74,9 @@ export function usageRouter(deps: { cfg: Config; usage: UsageService; anchor: An
         return res.status(404).json({ error: "not found", code: "not_found" });
       }
       if (!adminAuthorized(req)) {
-        return res.status(401).json({ error: "unauthorized", code: "unauthorized" });
+        return res
+          .status(401)
+          .json({ error: "unauthorized", code: "unauthorized" });
       }
       const body = (req.body ?? {}) as { week?: string; current?: boolean };
       const now = Date.now();
@@ -75,8 +86,34 @@ export function usageRouter(deps: { cfg: Config; usage: UsageService; anchor: An
           : body.current
             ? isoWeek(now)
             : isoWeek(now - 7 * 24 * 60 * 60 * 1000); // previous complete week
-      const result = await finalizeWeeklyReport(deps.usage, deps.anchor, week, undefined, now);
+      const result = await finalizeWeeklyReport(
+        deps.usage,
+        deps.anchor,
+        week,
+        undefined,
+        now,
+      );
       return res.status(result.anchored ? 200 : 202).json(result);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Admin-only mathematical analytics: activity-score + engagement
+  // distributions (mean/median/stdev/percentiles/Gini), referral K-factor and
+  // reuse rate, and the week-over-week retention curve. Aggregate only — no
+  // per-identity rows leave the relay. Auth: Authorization: Bearer <token>.
+  r.get("/analytics", async (req, res, next) => {
+    try {
+      if (!deps.cfg.USAGE_ADMIN_TOKEN) {
+        return res.status(404).json({ error: "not found", code: "not_found" });
+      }
+      if (!adminAuthorized(req)) {
+        return res
+          .status(401)
+          .json({ error: "unauthorized", code: "unauthorized" });
+      }
+      return res.json(await deps.usage.buildAnalytics());
     } catch (err) {
       next(err);
     }
@@ -93,7 +130,10 @@ export function usageRouter(deps: { cfg: Config; usage: UsageService; anchor: An
   r.get("/reports/:week", async (req, res, next) => {
     try {
       const row = await deps.usage.store.getReport(req.params.week);
-      if (!row) return res.status(404).json({ error: "no report for that week", code: "not_found" });
+      if (!row)
+        return res
+          .status(404)
+          .json({ error: "no report for that week", code: "not_found" });
       // `report` is the exact published JSON (already-canonical string). The
       // public page re-hashes it and compares to `sha256` and the on-chain value.
       res.json({
