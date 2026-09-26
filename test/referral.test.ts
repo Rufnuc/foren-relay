@@ -285,5 +285,81 @@ describe("metrics: read-only dashboard feed", () => {
     const ok = await request(ctx.app).get("/v1/usage/metrics");
     expect(ok.status).toBe(200);
     expect(ok.body).toHaveProperty("activity");
+    expect(ok.body).toHaveProperty("activeUsers");
+  });
+});
+
+describe("register: idle installs count as users", () => {
+  async function signUsage(id: Ident, counters: Record<string, number>) {
+    const sub = {
+      v: 1,
+      anonId: id.anonId,
+      pubKey: id.pubKey,
+      counters: {
+        record_created: 0,
+        record_updated: 0,
+        evidence_added: 0,
+        verification_performed: 0,
+        export_performed: 0,
+        ...counters,
+      },
+      seq: 1,
+      nonce: b64url(webcrypto.getRandomValues(new Uint8Array(16))),
+      issuedAt: Date.now(),
+    };
+    const sig = b64url(
+      new Uint8Array(
+        await subtle.sign(
+          SIGN,
+          id.priv,
+          new TextEncoder().encode(canonicalize(sub)),
+        ),
+      ),
+    );
+    return { ...sub, signature: sig };
+  }
+
+  it("a registered install counts as a user but not an active user", async () => {
+    const ctx = makeApp({ METRICS_PUBLIC: "true" });
+    const a = await makeIdentity();
+
+    const reg = await request(ctx.app)
+      .post("/v1/usage/register")
+      .send(await signEnvelope(a, {}));
+    expect(reg.status).toBe(200);
+    expect(reg.body.status).toBe("registered");
+    // Idempotent — registering again doesn't double-count.
+    await request(ctx.app)
+      .post("/v1/usage/register")
+      .send(await signEnvelope(a, {}));
+
+    const m = await request(ctx.app).get("/v1/usage/metrics");
+    expect(m.body.population).toBe(1); // counted as a user
+    expect(m.body.activeUsers).toBe(0); // no action yet
+  });
+
+  it("acting after registering keeps the user counted once (union)", async () => {
+    const ctx = makeApp({ METRICS_PUBLIC: "true" });
+    const a = await makeIdentity();
+    await request(ctx.app)
+      .post("/v1/usage/register")
+      .send(await signEnvelope(a, {}));
+    const posted = await request(ctx.app)
+      .post("/v1/usage")
+      .send(await signUsage(a, { record_created: 3 }));
+    expect(posted.status).toBe(200);
+
+    const m = await request(ctx.app).get("/v1/usage/metrics");
+    expect(m.body.population).toBe(1); // install ∪ active — still one person
+    expect(m.body.activeUsers).toBe(1);
+  });
+
+  it("rejects a forged register", async () => {
+    const ctx = makeApp({ METRICS_PUBLIC: "true" });
+    const a = await makeIdentity();
+    const env = await signEnvelope(a, {});
+    (env as { signature: string }).signature = b64url(new Uint8Array(64));
+    const res = await request(ctx.app).post("/v1/usage/register").send(env);
+    expect(res.status).toBe(400);
   });
 });

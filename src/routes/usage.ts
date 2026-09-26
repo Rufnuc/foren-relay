@@ -86,6 +86,20 @@ export function usageRouter(deps: {
     }
   });
 
+  // Register an install/activation: a signed proof of an anonymous identity with
+  // no counters, sent once when a device finishes setup, so a new-but-idle
+  // install still counts as a user. Shares the usage submit rate limit.
+  r.post("/register", submitLimiter, async (req, res, next) => {
+    try {
+      const out = await deps.usage.register(req.body);
+      if (!out.ok)
+        return res.status(400).json({ error: out.message, code: out.code });
+      return res.status(200).json({ ok: true, status: out.value.status });
+    } catch (err) {
+      next(err);
+    }
+  });
+
   // Finalise + anchor a weekly report, IN the relay (so the Solana key and the
   // database never leave it). Triggered by the scheduler (GitHub Action) or
   // manually. Auth: Authorization: Bearer <USAGE_ADMIN_TOKEN>. Body (optional):

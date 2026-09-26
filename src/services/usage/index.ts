@@ -199,9 +199,11 @@ export interface ActivityScoreResult {
 export interface AnalyticsReport {
   generatedAt: number;
   week: string;
-  population: number;
-  activity: Distribution;
-  scores: Distribution;
+  population: number; // total users (installs ∪ active identities)
+  activeUsers: number; // identities that have performed ≥1 action
+  activity: Distribution; // over active users only
+  scores: Distribution; // over active users only
+
   referrals: {
     links: number;
     redemptions: number;
@@ -222,6 +224,10 @@ export interface UsageService {
     body: unknown,
     now?: number,
   ): Promise<{ status: string; code?: string; message?: string }>;
+  register(
+    body: unknown,
+    now?: number,
+  ): Promise<ServiceResult<{ status: string }>>;
   redeemReferral(
     body: unknown,
     now?: number,
@@ -295,6 +301,20 @@ export function buildUsageService(
         logger?.warn({ err }, "usage: nonce prune failed");
       }
       return { status: applied.status };
+    },
+
+    async register(body: unknown, now = Date.now()) {
+      // A signed proof of an anonymous identity, no counters. Records the install
+      // so a device that has finished setup but not acted yet still counts as a
+      // user. Idempotent, and kept out of the activity/report tables.
+      const res = await verifySignedEnvelope<Record<string, never>>(body, [], {
+        now,
+        maxSkewMs: cfg.maxSkewMs,
+      });
+      if (!res.ok)
+        return { ok: false as const, code: res.code, message: res.message };
+      await store.registerIdentity(res.anonId, "", isoWeek(now), now);
+      return { ok: true as const, value: { status: "registered" } };
     },
 
     async redeemReferral(body: unknown, now = Date.now()) {
@@ -403,17 +423,19 @@ export function buildUsageService(
       );
       const rt = await store.referralTotals();
       const retention = retentionCurve(await store.retentionPoints());
+      const totalUsers = await store.totalUsers();
       return {
         generatedAt: now,
         week: curWeek,
-        population: acts.length,
-        activity: describe(totals),
+        population: totalUsers, // installs ∪ active identities
+        activeUsers: acts.length, // performed ≥1 action
+        activity: describe(totals), // distributions over active users only
         scores: describe(scores),
         referrals: {
           links: rt.links,
           redemptions: rt.redemptions,
           distinctRedeemers: rt.distinctRedeemers,
-          kFactor: kFactor(rt.distinctRedeemers, acts.length),
+          kFactor: kFactor(rt.distinctRedeemers, totalUsers),
           reuseRate: reuseRate(rt.redemptions, rt.links),
         },
         retention,
