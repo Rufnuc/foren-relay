@@ -156,6 +156,25 @@ export function buildApp(deps: ServerDeps): {
       );
       res.sendFile(path.join(process.cwd(), "public", "usage.html"));
     });
+
+    // Shareable metrics dashboard (self-contained, aggregate-only). The page
+    // itself carries no data — it fetches the read-only /v1/usage/metrics feed
+    // (same origin) using the ?k= token from its own URL — so connect-src 'self'
+    // is all it needs.
+    app.get("/metrics", (_req, res) => {
+      res.setHeader(
+        "Content-Security-Policy",
+        [
+          "default-src 'none'",
+          "script-src 'unsafe-inline'",
+          "style-src 'unsafe-inline'",
+          "connect-src 'self'",
+          "base-uri 'none'",
+          "form-action 'none'",
+        ].join("; "),
+      );
+      res.sendFile(path.join(process.cwd(), "public", "metrics.html"));
+    });
   }
 
   // Catch-all 404 (after routes).

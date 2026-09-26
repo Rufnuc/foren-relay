@@ -74,6 +74,8 @@ function makeApp(overrides: Record<string, string> = {}) {
   process.env.NODE_ENV = "test";
   process.env.PINNING_PROVIDER = "noop";
   delete process.env.USAGE_ADMIN_TOKEN;
+  delete process.env.METRICS_TOKEN;
+  delete process.env.METRICS_PUBLIC;
   for (const [k, v] of Object.entries(overrides)) process.env[k] = v;
   const cfg = loadConfig();
   const usage = buildUsageService({
@@ -245,5 +247,43 @@ describe("analytics: admin-gated", () => {
     expect(ok.body).toHaveProperty("scores");
     expect(ok.body.referrals).toHaveProperty("kFactor");
     expect(ok.body).toHaveProperty("retention");
+  });
+});
+
+describe("metrics: read-only dashboard feed", () => {
+  it("404 when neither metrics nor admin token configured and not public", async () => {
+    const ctx = makeApp();
+    const res = await request(ctx.app).get("/v1/usage/metrics");
+    expect(res.status).toBe(404);
+  });
+
+  it("401 without the key, 200 with the read-only key (via ?k= or Bearer)", async () => {
+    const ctx = makeApp({ METRICS_TOKEN: "read-key" });
+    expect((await request(ctx.app).get("/v1/usage/metrics")).status).toBe(401);
+    expect(
+      (await request(ctx.app).get("/v1/usage/metrics?k=wrong")).status,
+    ).toBe(401);
+
+    const viaQuery = await request(ctx.app).get("/v1/usage/metrics?k=read-key");
+    expect(viaQuery.status).toBe(200);
+    expect(viaQuery.body).toHaveProperty("referrals");
+
+    const viaHeader = await request(ctx.app)
+      .get("/v1/usage/metrics")
+      .set("authorization", "Bearer read-key");
+    expect(viaHeader.status).toBe(200);
+  });
+
+  it("the admin token also opens the metrics feed", async () => {
+    const ctx = makeApp({ USAGE_ADMIN_TOKEN: "admin-key" });
+    const ok = await request(ctx.app).get("/v1/usage/metrics?k=admin-key");
+    expect(ok.status).toBe(200);
+  });
+
+  it("METRICS_PUBLIC=true serves the feed with no key", async () => {
+    const ctx = makeApp({ METRICS_PUBLIC: "true" });
+    const ok = await request(ctx.app).get("/v1/usage/metrics");
+    expect(ok.status).toBe(200);
+    expect(ok.body).toHaveProperty("activity");
   });
 });
