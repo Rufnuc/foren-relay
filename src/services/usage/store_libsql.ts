@@ -363,6 +363,27 @@ export function buildLibsqlUsageStore(
       }));
     },
 
+    async registerIdentity(
+      anonId: string,
+      _pubKey: string,
+      week: string,
+      now: number,
+    ): Promise<void> {
+      await ensure();
+      await client.execute({
+        sql: "INSERT OR IGNORE INTO install(anon_id, first_seen_week, registered_at) VALUES (?,?,?)",
+        args: [anonId, week, now],
+      });
+    },
+
+    async totalUsers(): Promise<number> {
+      await ensure();
+      const res = await client.execute(
+        "SELECT COUNT(*) AS n FROM (SELECT anon_id FROM install UNION SELECT anon_id FROM identity)",
+      );
+      return num((res.rows[0] as unknown as { n: unknown }).n);
+    },
+
     async referralTotals(): Promise<ReferralTotals> {
       await ensure();
       const res = await client.execute(

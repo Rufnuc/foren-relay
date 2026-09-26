@@ -135,6 +135,16 @@ export interface UsageStore {
   getReferral(refId: string): Promise<ReferralRow | undefined>;
   getActivity(anonId: string): Promise<ActivityRow | undefined>;
   listActivity(): Promise<ActivityRow[]>;
+  // Register an install/activation: create the identity row (activity 0) and
+  // mark it present this week, if it doesn't already exist. Idempotent.
+  registerIdentity(
+    anonId: string,
+    pubKey: string,
+    week: string,
+    now: number,
+  ): Promise<void>;
+  // Total distinct users = installs ∪ active identities.
+  totalUsers(): Promise<number>;
   referralTotals(): Promise<ReferralTotals>;
   retentionPoints(): Promise<
     { week: string; active: number; retained: number }[]
@@ -153,6 +163,15 @@ export const USAGE_SCHEMA_STATEMENTS = [
   activity_total INTEGER NOT NULL DEFAULT 0,
   active_weeks INTEGER NOT NULL DEFAULT 0,
   last_active_week TEXT
+)`,
+  // An install/activation: recorded when a device finishes setup, even before it
+  // does anything. Kept SEPARATE from `identity` (which is created only on real
+  // activity) so the public weekly report's identity accounting stays activity-
+  // based, while the dashboard can still show total users vs active users.
+  `CREATE TABLE IF NOT EXISTS install (
+  anon_id TEXT PRIMARY KEY,
+  first_seen_week TEXT NOT NULL,
+  registered_at INTEGER NOT NULL
 )`,
   // A shared referral LINK, keyed by an opaque, unguessable id the relay is
   // given (SHA-256 of the secret code the creator holds). The relay never sees
@@ -236,6 +255,11 @@ CREATE TABLE IF NOT EXISTS referral_redeemer (
   redeemer_commit TEXT NOT NULL,
   redeemed_at INTEGER NOT NULL,
   PRIMARY KEY (ref_id, redeemer_commit)
+);
+CREATE TABLE IF NOT EXISTS install (
+  anon_id TEXT PRIMARY KEY,
+  first_seen_week TEXT NOT NULL,
+  registered_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS identity_week (
   week TEXT NOT NULL,
@@ -607,6 +631,26 @@ export function buildLocalUsageStore(path: string): UsageStore {
         lastActiveWeek: (r.last_active_week as string) ?? null,
         firstSeenWeek: r.first_seen_week as string,
       }));
+    },
+
+    async registerIdentity(
+      anonId: string,
+      _pubKey: string,
+      week: string,
+      now: number,
+    ): Promise<void> {
+      db.prepare(
+        "INSERT OR IGNORE INTO install(anon_id, first_seen_week, registered_at) VALUES (?,?,?)",
+      ).run(anonId, week, now);
+    },
+
+    async totalUsers(): Promise<number> {
+      const r = db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM (SELECT anon_id FROM install UNION SELECT anon_id FROM identity)",
+        )
+        .get() as { n: number };
+      return r.n;
     },
 
     async referralTotals(): Promise<ReferralTotals> {

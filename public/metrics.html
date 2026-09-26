@@ -6,179 +6,381 @@
     <meta name="robots" content="noindex" />
     <title>Foren — Metrics</title>
     <style>
-      :root { --fg: #111; --muted: #666; --line: #e2e2e2; --bg: #fff; --bar: #111; --bar-bg: #f0f0f0; }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0; background: var(--bg); color: var(--fg);
-        font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      :root {
+        --fg: #111;
+        --muted: #666;
+        --line: #e2e2e2;
+        --bg: #fff;
+        --bar: #111;
+        --bar-bg: #f0f0f0;
       }
-      .wrap { max-width: 860px; margin: 0 auto; padding: 32px 20px 80px; }
-      h1 { font-size: 22px; letter-spacing: .04em; margin: 0 0 4px; }
-      .sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
-      h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); margin: 32px 0 12px; }
-      .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
-      .kpi { border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
-      .kpi .v { font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
-      .kpi .l { font-size: 12px; color: var(--muted); margin-top: 4px; }
-      .card { border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-top: 14px; }
-      table { width: 100%; border-collapse: collapse; }
-      td { padding: 9px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
-      td.k { color: var(--muted); }
-      td.n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
-      tr:last-child td { border-bottom: none; }
-      .bars { display: flex; flex-direction: column; gap: 10px; }
-      .bar { display: grid; grid-template-columns: 90px 1fr 52px; align-items: center; gap: 10px; font-size: 13px; }
-      .bar .track { background: var(--bar-bg); border-radius: 6px; height: 12px; overflow: hidden; }
-      .bar .fill { background: var(--bar); height: 100%; border-radius: 6px; }
-      .bar .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
-      .muted { color: var(--muted); }
-      .empty { color: var(--muted); padding: 18px 0; }
-      .gate { border: 1px solid var(--line); border-radius: 12px; padding: 24px; margin-top: 24px; }
-      .gate input { width: 100%; padding: 11px; border: 1px solid var(--line); border-radius: 8px; font: inherit; margin: 12px 0; }
-      .gate button { padding: 11px 18px; border: 0; border-radius: 8px; background: #111; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
-      .err { color: #b00020; font-size: 13px; margin-top: 10px; }
-      .note { font-size: 12.5px; color: var(--muted); border-top: 1px solid var(--line); margin-top: 32px; padding-top: 18px; }
-      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font:
+          15px/1.6 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          Roboto,
+          Helvetica,
+          Arial,
+          sans-serif;
+      }
+      .wrap {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 32px 20px 80px;
+      }
+      h1 {
+        font-size: 22px;
+        letter-spacing: 0.04em;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: var(--muted);
+        margin: 0 0 24px;
+        font-size: 13px;
+      }
+      h2 {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+        margin: 32px 0 12px;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 14px;
+      }
+      .kpi {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 18px;
+      }
+      .kpi .v {
+        font-size: 30px;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: -0.01em;
+      }
+      .kpi .l {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 4px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 20px;
+        margin-top: 14px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      td {
+        padding: 9px 0;
+        border-bottom: 1px solid var(--line);
+        font-size: 14px;
+      }
+      td.k {
+        color: var(--muted);
+      }
+      td.n {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+      tr:last-child td {
+        border-bottom: none;
+      }
+      .bars {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .bar {
+        display: grid;
+        grid-template-columns: 90px 1fr 52px;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+      }
+      .bar .track {
+        background: var(--bar-bg);
+        border-radius: 6px;
+        height: 12px;
+        overflow: hidden;
+      }
+      .bar .fill {
+        background: var(--bar);
+        height: 100%;
+        border-radius: 6px;
+      }
+      .bar .val {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .empty {
+        color: var(--muted);
+        padding: 18px 0;
+      }
+      .gate {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 24px;
+        margin-top: 24px;
+      }
+      .gate input {
+        width: 100%;
+        padding: 11px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        font: inherit;
+        margin: 12px 0;
+      }
+      .gate button {
+        padding: 11px 18px;
+        border: 0;
+        border-radius: 8px;
+        background: #111;
+        color: #fff;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .err {
+        color: #b00020;
+        font-size: 13px;
+        margin-top: 10px;
+      }
+      .note {
+        font-size: 12.5px;
+        color: var(--muted);
+        border-top: 1px solid var(--line);
+        margin-top: 32px;
+        padding-top: 18px;
+      }
+      code {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
       <h1>FOREN — METRICS</h1>
-      <p class="sub" id="sub">Live, aggregate product metrics. Anonymous — no personal or incident data.</p>
+      <p class="sub" id="sub">
+        Live, aggregate product metrics. Anonymous — no personal or incident
+        data.
+      </p>
 
       <div id="content"></div>
 
-      <div class="gate" id="gate" style="display:none">
+      <div class="gate" id="gate" style="display: none">
         <strong>Access key required</strong>
-        <p class="muted" style="margin:8px 0 0;font-size:13px">Enter the read-only metrics key to view the dashboard.</p>
-        <input id="key" type="password" placeholder="Metrics access key" autocomplete="off" />
+        <p class="muted" style="margin: 8px 0 0; font-size: 13px">
+          Enter the read-only metrics key to view the dashboard.
+        </p>
+        <input
+          id="key"
+          type="password"
+          placeholder="Metrics access key"
+          autocomplete="off"
+        />
         <button id="go">View metrics</button>
-        <div class="err" id="err" style="display:none"></div>
+        <div class="err" id="err" style="display: none"></div>
       </div>
 
       <p class="note">
-        These figures are computed from anonymous cryptographic identities. An anonymous identity does not necessarily
-        represent a unique human — one person may create several, and referral counts reflect link redemptions, not
-        verified individuals. Figures are aggregate only and contain no personal, location, or incident data. The
-        K-factor shown is a proxy (distinct redeemers ÷ active identities), not a cohort-tracked viral coefficient.
+        These figures are computed from anonymous cryptographic identities. An
+        anonymous identity does not necessarily represent a unique human — one
+        person may create several, and referral counts reflect link redemptions,
+        not verified individuals. Figures are aggregate only and contain no
+        personal, location, or incident data. The K-factor shown is a proxy
+        (distinct redeemers ÷ active identities), not a cohort-tracked viral
+        coefficient.
       </p>
     </div>
 
     <script>
       const $ = (id) => document.getElementById(id);
       const qs = new URLSearchParams(location.search);
-      const LS = 'foren.metricsKey';
+      const LS = "foren.metricsKey";
 
-      const nfInt = new Intl.NumberFormat('en-GB');
+      const nfInt = new Intl.NumberFormat("en-GB");
       const int = (n) => nfInt.format(Math.round(n || 0));
-      const dec = (n, d = 2) => (n == null ? '—' : Number(n).toFixed(d));
-      const pct = (n) => (n == null ? '—' : (n * 100).toFixed(1) + '%');
+      const dec = (n, d = 2) => (n == null ? "—" : Number(n).toFixed(d));
+      const pct = (n) => (n == null ? "—" : (n * 100).toFixed(1) + "%");
 
       function keyFromEnv() {
-        return qs.get('k') || localStorage.getItem(LS) || '';
+        return qs.get("k") || localStorage.getItem(LS) || "";
       }
 
       async function load() {
         const k = keyFromEnv();
         let res;
         try {
-          res = await fetch('/v1/usage/metrics' + (k ? '?k=' + encodeURIComponent(k) : ''));
+          res = await fetch(
+            "/v1/usage/metrics" + (k ? "?k=" + encodeURIComponent(k) : ""),
+          );
         } catch (e) {
-          return showGate('Could not reach the server. Try again.');
+          return showGate("Could not reach the server. Try again.");
         }
-        if (res.status === 401) return showGate(k ? 'That key was not accepted.' : '');
+        if (res.status === 401)
+          return showGate(k ? "That key was not accepted." : "");
         if (res.status === 404) {
-          $('content').innerHTML = '<div class="empty">The metrics dashboard is not enabled on this relay.</div>';
+          $("content").innerHTML =
+            '<div class="empty">The metrics dashboard is not enabled on this relay.</div>';
           return;
         }
-        if (!res.ok) return showGate('Unexpected error (' + res.status + ').');
+        if (!res.ok) return showGate("Unexpected error (" + res.status + ").");
         // Remember a working key (from the URL) so refreshes don't need it again.
-        if (qs.get('k')) {
-          try { localStorage.setItem(LS, qs.get('k')); } catch {}
+        if (qs.get("k")) {
+          try {
+            localStorage.setItem(LS, qs.get("k"));
+          } catch {}
         }
         render(await res.json());
       }
 
       function showGate(msg) {
-        $('content').innerHTML = '';
-        $('gate').style.display = 'block';
-        if (msg) { $('err').style.display = 'block'; $('err').textContent = msg; }
+        $("content").innerHTML = "";
+        $("gate").style.display = "block";
+        if (msg) {
+          $("err").style.display = "block";
+          $("err").textContent = msg;
+        }
       }
 
-      $('go').addEventListener('click', () => {
-        const v = $('key').value.trim();
+      $("go").addEventListener("click", () => {
+        const v = $("key").value.trim();
         if (!v) return;
-        try { localStorage.setItem(LS, v); } catch {}
-        location.href = location.pathname + '?k=' + encodeURIComponent(v);
+        try {
+          localStorage.setItem(LS, v);
+        } catch {}
+        location.href = location.pathname + "?k=" + encodeURIComponent(v);
       });
-      $('key').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').click(); });
+      $("key").addEventListener("keydown", (e) => {
+        if (e.key === "Enter") $("go").click();
+      });
 
       function kpi(v, l) {
-        return '<div class="kpi"><div class="v">' + v + '</div><div class="l">' + l + '</div></div>';
+        return (
+          '<div class="kpi"><div class="v">' +
+          v +
+          '</div><div class="l">' +
+          l +
+          "</div></div>"
+        );
       }
-      function row(k, v) { return '<tr><td class="k">' + k + '</td><td class="n">' + v + '</td></tr>'; }
+      function row(k, v) {
+        return (
+          '<tr><td class="k">' + k + '</td><td class="n">' + v + "</td></tr>"
+        );
+      }
 
       function barChart(items) {
         const max = Math.max(1, ...items.map((i) => i.value));
-        return '<div class="bars">' + items.map((i) => {
-          const w = Math.max(2, (i.value / max) * 100);
-          return '<div class="bar"><div class="muted">' + i.label + '</div>' +
-            '<div class="track"><div class="fill" style="width:' + w + '%"></div></div>' +
-            '<div class="val">' + i.display + '</div></div>';
-        }).join('') + '</div>';
+        return (
+          '<div class="bars">' +
+          items
+            .map((i) => {
+              const w = Math.max(2, (i.value / max) * 100);
+              return (
+                '<div class="bar"><div class="muted">' +
+                i.label +
+                "</div>" +
+                '<div class="track"><div class="fill" style="width:' +
+                w +
+                '%"></div></div>' +
+                '<div class="val">' +
+                i.display +
+                "</div></div>"
+              );
+            })
+            .join("") +
+          "</div>"
+        );
       }
 
       function render(d) {
-        $('gate').style.display = 'none';
+        $("gate").style.display = "none";
         const gen = new Date(d.generatedAt);
-        $('sub').textContent = 'Live, aggregate product metrics · ' + d.week + ' · updated ' + gen.toLocaleString('en-GB');
+        $("sub").textContent =
+          "Live, aggregate product metrics · " +
+          d.week +
+          " · updated " +
+          gen.toLocaleString("en-GB");
 
         const r = d.referrals || {};
         const a = d.activity || {};
         const s = d.scores || {};
 
-        let html = '';
+        let html = "";
 
         // Headline KPIs.
-        html += '<div class="kpis">' +
-          kpi(int(d.population), 'Anonymous users') +
-          kpi(dec(r.kFactor, 2), 'Virality (K-factor)') +
-          kpi(pct(r.reuseRate), 'Link reuse') +
-          kpi(int(s.mean) + '<span class="muted" style="font-size:16px">/100</span>', 'Avg activity score') +
-          '</div>';
+        html +=
+          '<div class="kpis">' +
+          kpi(int(d.population), "Total users") +
+          kpi(int(d.activeUsers), "Active users") +
+          kpi(dec(r.kFactor, 2), "Virality (K-factor)") +
+          kpi(pct(r.reuseRate), "Link reuse") +
+          kpi(
+            int(s.mean) +
+              '<span class="muted" style="font-size:16px">/100</span>',
+            "Avg activity score",
+          ) +
+          "</div>";
 
         // Referrals.
-        html += '<h2>Referrals — “Help a friend”</h2><div class="card"><table>' +
-          row('Links shared', int(r.links)) +
-          row('People reached (distinct)', int(r.distinctRedeemers)) +
-          row('Total link opens', int(r.redemptions)) +
-          row('K-factor (proxy)', dec(r.kFactor, 2)) +
-          row('Reuse rate', pct(r.reuseRate)) +
-          '</table></div>';
+        html +=
+          '<h2>Referrals — “Help a friend”</h2><div class="card"><table>' +
+          row("Links shared", int(r.links)) +
+          row("People reached (distinct)", int(r.distinctRedeemers)) +
+          row("Total link opens", int(r.redemptions)) +
+          row("K-factor (proxy)", dec(r.kFactor, 2)) +
+          row("Reuse rate", pct(r.reuseRate)) +
+          "</table></div>";
 
         // Engagement distributions.
-        html += '<h2>Engagement</h2><div class="card"><table>' +
-          row('Active anonymous users', int(a.count)) +
-          row('Actions · median', int(a.p50)) +
-          row('Actions · mean', dec(a.mean, 1)) +
-          row('Actions · 90th percentile', int(a.p90)) +
-          row('Activity score · median', int(s.p50)) +
-          row('Activity score · 90th percentile', int(s.p90)) +
-          row('Engagement concentration (Gini)', dec(a.gini, 2)) +
-          '</table></div>';
+        html +=
+          '<h2>Engagement</h2><div class="card"><table>' +
+          row("Active anonymous users", int(a.count)) +
+          row("Actions · median", int(a.p50)) +
+          row("Actions · mean", dec(a.mean, 1)) +
+          row("Actions · 90th percentile", int(a.p90)) +
+          row("Activity score · median", int(s.p50)) +
+          row("Activity score · 90th percentile", int(s.p90)) +
+          row("Engagement concentration (Gini)", dec(a.gini, 2)) +
+          "</table></div>";
 
         // Retention curve.
         html += '<h2>Week-over-week retention</h2><div class="card">';
         if (d.retention && d.retention.length) {
-          html += barChart(d.retention.map((p) => ({
-            label: p.week, value: p.rate, display: pct(p.rate),
-          })));
+          html += barChart(
+            d.retention.map((p) => ({
+              label: p.week,
+              value: p.rate,
+              display: pct(p.rate),
+            })),
+          );
         } else {
-          html += '<div class="empty">Not enough weeks of data yet — the retention curve appears once there are at least two active weeks.</div>';
+          html +=
+            '<div class="empty">Not enough weeks of data yet — the retention curve appears once there are at least two active weeks.</div>';
         }
-        html += '</div>';
+        html += "</div>";
 
-        $('content').innerHTML = html;
+        $("content").innerHTML = html;
       }
 
       load();
