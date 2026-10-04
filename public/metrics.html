@@ -174,6 +174,63 @@
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
         font-size: 12px;
       }
+      /* One-line explainer under each section heading. */
+      .hint {
+        font-size: 12.5px;
+        color: var(--muted);
+        margin: -4px 0 12px;
+      }
+      /* The ⓘ info marker + its hover/tap tooltip. */
+      .info {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 15px;
+        height: 15px;
+        margin-left: 6px;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        color: var(--muted);
+        font-size: 10px;
+        font-style: normal;
+        font-weight: 700;
+        line-height: 1;
+        cursor: help;
+        position: relative;
+        vertical-align: middle;
+      }
+      .info:hover,
+      .info:focus {
+        background: #111;
+        color: #fff;
+        border-color: #111;
+        outline: none;
+      }
+      h2 .info {
+        vertical-align: baseline;
+      }
+      /* One shared tooltip, positioned by JS and clamped to the viewport so it
+         never clips off an edge (e.g. the right-most KPI). */
+      #tip {
+        position: fixed;
+        z-index: 50;
+        max-width: 260px;
+        background: #111;
+        color: #fff;
+        padding: 9px 11px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 1.5;
+        text-align: left;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.12s ease;
+      }
+      #tip.show {
+        opacity: 1;
+      }
     </style>
   </head>
   <body>
@@ -274,18 +331,35 @@
         if (e.key === "Enter") $("go").click();
       });
 
-      function kpi(v, l) {
+      // An ⓘ marker whose plain-English explanation shows on hover or tap.
+      function info(tip) {
+        const t = String(tip).replace(/"/g, "&quot;");
+        return (
+          '<i class="info" tabindex="0" role="img" aria-label="' +
+          t +
+          '" data-tip="' +
+          t +
+          '">i</i>'
+        );
+      }
+      function kpi(v, l, tip) {
         return (
           '<div class="kpi"><div class="v">' +
           v +
           '</div><div class="l">' +
           l +
+          (tip ? info(tip) : "") +
           "</div></div>"
         );
       }
-      function row(k, v) {
+      function row(k, v, tip) {
         return (
-          '<tr><td class="k">' + k + '</td><td class="n">' + v + "</td></tr>"
+          '<tr><td class="k">' +
+          k +
+          (tip ? info(tip) : "") +
+          '</td><td class="n">' +
+          v +
+          "</td></tr>"
         );
       }
 
@@ -331,41 +405,125 @@
         // Headline KPIs.
         html +=
           '<div class="kpis">' +
-          kpi(int(d.population), "Total users") +
-          kpi(int(d.activeUsers), "Active users") +
-          kpi(dec(r.kFactor, 2), "Virality (K-factor)") +
-          kpi(pct(r.reuseRate), "Link reuse") +
+          kpi(
+            int(d.population),
+            "Total users",
+            "Everyone who has set up the app on a device — whether or not they've done anything yet.",
+          ) +
+          kpi(
+            int(d.activeUsers),
+            "Active users",
+            "People who have actually used it — created a record, added evidence, run a verification, or exported.",
+          ) +
+          kpi(
+            dec(r.kFactor, 2),
+            "Virality (K-factor)",
+            "On average, how many new people each user brings in through “Help a friend” invites. Above 1.00 means growth feeds itself.",
+          ) +
+          kpi(
+            pct(r.reuseRate),
+            "Link reuse",
+            "The share of invite opens that are a link being shared on and opened again, beyond its first use.",
+          ) +
           kpi(
             int(s.mean) +
               '<span class="muted" style="font-size:16px">/100</span>',
             "Avg activity score",
+            "The average engagement score (0–100) across active users. A user scores higher for recent, frequent, and heavier use.",
           ) +
           "</div>";
 
         // Referrals.
         html +=
-          '<h2>Referrals — “Help a friend”</h2><div class="card"><table>' +
-          row("Links shared", int(r.links)) +
-          row("People reached (distinct)", int(r.distinctRedeemers)) +
-          row("Total link opens", int(r.redemptions)) +
-          row("K-factor (proxy)", dec(r.kFactor, 2)) +
-          row("Reuse rate", pct(r.reuseRate)) +
+          "<h2>Referrals — “Help a friend”" +
+          info(
+            "How the built-in invite feature is spreading. The relay only ever sees anonymous tallies — never who invited whom.",
+          ) +
+          "</h2>" +
+          '<p class="hint">How the “Help a friend” invite feature is spreading.</p>' +
+          '<div class="card"><table>' +
+          row(
+            "Links shared",
+            int(r.links),
+            "How many invite links have been created and used at least once.",
+          ) +
+          row(
+            "People reached (distinct)",
+            int(r.distinctRedeemers),
+            "The number of different people who opened an invite link. This is the real “word of mouth” reach.",
+          ) +
+          row(
+            "Total link opens",
+            int(r.redemptions),
+            "Every time a link was opened, including the same person opening it more than once.",
+          ) +
+          row(
+            "K-factor (proxy)",
+            dec(r.kFactor, 2),
+            "Distinct people reached ÷ total users. A rough virality measure — above 1.00 means each user brings in more than one new person.",
+          ) +
+          row(
+            "Reuse rate",
+            pct(r.reuseRate),
+            "The share of opens that are repeat/onward opens rather than a link's first use — i.e. how much links get passed along.",
+          ) +
           "</table></div>";
 
         // Engagement distributions.
         html +=
-          '<h2>Engagement</h2><div class="card"><table>' +
-          row("Active anonymous users", int(a.count)) +
-          row("Actions · median", int(a.p50)) +
-          row("Actions · mean", dec(a.mean, 1)) +
-          row("Actions · 90th percentile", int(a.p90)) +
-          row("Activity score · median", int(s.p50)) +
-          row("Activity score · 90th percentile", int(s.p90)) +
-          row("Engagement concentration (Gini)", dec(a.gini, 2)) +
+          "<h2>Engagement" +
+          info(
+            "How much active users actually do. Medians and percentiles describe the typical and the heavier users; Gini shows how evenly usage is spread.",
+          ) +
+          "</h2>" +
+          '<p class="hint">How much active users do, and how evenly that is spread.</p>' +
+          '<div class="card"><table>' +
+          row(
+            "Active anonymous users",
+            int(a.count),
+            "People these engagement figures are based on (users with at least one action).",
+          ) +
+          row(
+            "Actions · median",
+            int(a.p50),
+            "The typical user: half of active users did more than this, half did less.",
+          ) +
+          row(
+            "Actions · mean",
+            dec(a.mean, 1),
+            "The average number of actions per active user.",
+          ) +
+          row(
+            "Actions · 90th percentile",
+            int(a.p90),
+            "Your power users: 90% of active users did this many actions or fewer (so the top 10% did more).",
+          ) +
+          row(
+            "Activity score · median",
+            int(s.p50),
+            "The typical user's engagement score out of 100.",
+          ) +
+          row(
+            "Activity score · 90th percentile",
+            int(s.p90),
+            "The score your top 10% most-engaged users beat.",
+          ) +
+          row(
+            "Engagement concentration (Gini)",
+            dec(a.gini, 2),
+            "How evenly usage is spread. 0 = everyone uses it about equally; closer to 1 = a few power users account for most activity.",
+          ) +
           "</table></div>";
 
         // Retention curve.
-        html += '<h2>Week-over-week retention</h2><div class="card">';
+        html +=
+          "<h2>Week-over-week retention" +
+          info(
+            "Of the people active in one week, the share who came back and were active the next week.",
+          ) +
+          "</h2>" +
+          '<p class="hint">Of the people active one week, how many return the next.</p>' +
+          '<div class="card">';
         if (d.retention && d.retention.length) {
           html += barChart(
             d.retention.map((p) => ({
@@ -382,6 +540,44 @@
 
         $("content").innerHTML = html;
       }
+
+      // Shared tooltip: shows an ⓘ marker's explanation on hover or tap (focus),
+      // positioned above the marker but clamped inside the viewport so long tips
+      // never clip off an edge. Works on touch screens via focus.
+      const tip = document.createElement("div");
+      tip.id = "tip";
+      document.body.appendChild(tip);
+      function showTip(el) {
+        tip.textContent = el.getAttribute("data-tip") || "";
+        tip.classList.add("show");
+        const r = el.getBoundingClientRect();
+        const tw = tip.offsetWidth;
+        const th = tip.offsetHeight;
+        let x = r.left + r.width / 2 - tw / 2;
+        x = Math.max(8, Math.min(x, window.innerWidth - tw - 8));
+        let y = r.top - th - 8;
+        if (y < 8) y = r.bottom + 8; // flip below if there's no room above
+        tip.style.left = x + "px";
+        tip.style.top = y + "px";
+      }
+      function hideTip() {
+        tip.classList.remove("show");
+      }
+      document.addEventListener("mouseover", (e) => {
+        const el = e.target.closest(".info");
+        if (el) showTip(el);
+      });
+      document.addEventListener("mouseout", (e) => {
+        if (e.target.closest(".info")) hideTip();
+      });
+      document.addEventListener("focusin", (e) => {
+        const el = e.target.closest(".info");
+        if (el) showTip(el);
+      });
+      document.addEventListener("focusout", (e) => {
+        if (e.target.closest(".info")) hideTip();
+      });
+      window.addEventListener("scroll", hideTip, { passive: true });
 
       load();
     </script>
